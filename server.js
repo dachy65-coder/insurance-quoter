@@ -251,17 +251,21 @@ await page.evaluate((mm, dd, yyyy, insurer, data) => {
   phone: body.phone,
 });
 // Date fields
-      // Date fields
+    await page.evaluate((mm, dd, yyyy) => {
       const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-      const startInputs = allInputs.filter(i=>(i.id||'').toLowerCase().includes('start')||(i.id||'').toLowerCase().includes('effective'));
-      const expInputs = allInputs.filter(i=>(i.id||'').toLowerCase().includes('expir')||(i.id||'').toLowerCase().includes('renew'));
+      const startInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('start') || (i.id||'').toLowerCase().includes('effective'));
+      const expInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('expir') || (i.id||'').toLowerCase().includes('renew'));
       [startInputs, expInputs].forEach(inputs => {
-        if(inputs.length>=3) { inputs[0].value=mm; inputs[1].value=dd; inputs[2].value=yyyy; inputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+        if (inputs.length >= 3) {
+          inputs[0].value = mm;
+          inputs[1].value = dd;
+          inputs[2].value = yyyy;
+          inputs.forEach(i => i.dispatchEvent(new Event('change', { bubbles: true })));
+        }
       });
       // Acknowledgements
-      document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r=>r.click());
-    }, mm, dd, yyyy, data.currentInsurer||'None');
-
+      document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r => r.click());
+    }, mm, dd, yyyy);
     await page.waitForTimeout(1000);
     await clickSubmit(page);
     console.log('Step 5: Submitted, waiting for Quote Summary...');
