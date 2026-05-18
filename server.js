@@ -8,205 +8,200 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Server Running' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running' }));
+
+async function clickNext(page) {
+  await page.evaluate(() => {
+    const selectors = ['input[value="Continue"]','input[value="Next"]','input[value="Submit"]','input[type="submit"]','button[type="submit"]'];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) { el.click(); return; }
+    }
+  });
+}
 
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
-  console.log('Quote request received:', data.firstName, data.lastName);
-
+  console.log('Quote request:', data.firstName, data.lastName);
   let browser;
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process']
     });
-
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
 
-    // STEP 1
-    console.log('Step 1: Getting Started...');
+    console.log('Step 1...');
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.click('input[value="No"]').catch(() => {});
-    await page.waitForSelector('input[id*="FirstName"], input[name*="FirstName"]', { timeout: 10000 });
-    const fnameEl = await page.$('input[id*="FirstName"], input[name*="FirstName"]');
-    if (fnameEl) { await fnameEl.click({ clickCount: 3 }); await fnameEl.type(data.firstName); }
-    const lnameEl = await page.$('input[id*="LastName"], input[name*="LastName"]');
-    if (lnameEl) { await lnameEl.click({ clickCount: 3 }); await lnameEl.type(data.lastName); }
-    const emailEl = await page.$('input[id*="Email"], input[name*="Email"], input[type="email"]');
-    if (emailEl) { await emailEl.click({ clickCount: 3 }); await emailEl.type(data.email); }
-    const phoneParts = data.phone.replace(/\D/g, '');
-    const phoneInputs = await page.$$('input[id*="Phone"], input[name*="Phone"]');
-    if (phoneInputs.length >= 3) {
-      await phoneInputs[0].click({ clickCount: 3 }); await phoneInputs[0].type(phoneParts.slice(0, 3));
-      await phoneInputs[1].click({ clickCount: 3 }); await phoneInputs[1].type(phoneParts.slice(3, 6));
-      await phoneInputs[2].click({ clickCount: 3 }); await phoneInputs[2].type(phoneParts.slice(6, 10));
-    }
-    const addrEl = await page.$('input[id*="Address"], input[name*="Address"]');
-    if (addrEl) { await addrEl.click({ clickCount: 3 }); await addrEl.type(data.address); }
-    const cityEl = await page.$('input[id*="City"], input[name*="City"]');
-    if (cityEl) { await cityEl.click({ clickCount: 3 }); await cityEl.type(data.city); }
-    await page.select('select[id*="State"], select[name*="State"]', data.state).catch(() => {});
-    const zipEl = await page.$('input[id*="Zip"], input[name*="Zip"]');
-    if (zipEl) { await zipEl.click({ clickCount: 3 }); await zipEl.type(data.zip); }
-    await page.click('input[value="Auto"]').catch(() => {});
-    await page.click('input[value="Continue"], input[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    await page.evaluate((d) => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      document.querySelectorAll('input[type="text"],input[type="email"]').forEach(inp => {
+        const id = (inp.id||'').toLowerCase();
+        if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value=d.lastName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email')) { inp.value=d.email; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address') && !id.includes('email')) { inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city')) { inp.value=d.city; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip')) { inp.value=d.zip; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const phoneInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i => (i.id||'').toLowerCase().includes('phone'));
+      const ph = d.phone.replace(/\D/g,'');
+      if(phoneInputs.length>=3) { phoneInputs[0].value=ph.slice(0,3); phoneInputs[1].value=ph.slice(3,6); phoneInputs[2].value=ph.slice(6,10); phoneInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+      document.querySelectorAll('select').forEach(sel => {
+        const id=(sel.id||'').toLowerCase();
+        if(id.includes('state')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
+    }, data);
+
+    await page.waitForTimeout(500);
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
     console.log('Step 1 done:', page.url());
 
-    // STEP 2
-    console.log('Step 2: Driver...');
+    console.log('Step 2...');
+    await page.waitForTimeout(2000);
+    await page.evaluate((d) => {
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value=d.lastName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const dob=d.dob.split('/');
+      const dobInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('dob')||(i.id||'').toLowerCase().includes('birth'));
+      if(dobInputs.length>=3){ dobInputs[0].value=dob[0]||'01'; dobInputs[1].value=dob[1]||'01'; dobInputs[2].value=dob[2]||'1990'; dobInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+      document.querySelectorAll('select').forEach(sel => {
+        const id=(sel.id||'').toLowerCase();
+        if(id.includes('gender')) { sel.value=d.gender; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('marital')) { sel.value=d.maritalStatus; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('license')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+    }, data);
+    await page.waitForTimeout(500);
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
     await page.waitForTimeout(1500);
-    const dFname = await page.$('input[id*="FirstName"], input[name*="FirstName"]');
-    if (dFname) { await dFname.click({ clickCount: 3 }); await dFname.type(data.firstName); }
-    const dLname = await page.$('input[id*="LastName"], input[name*="LastName"]');
-    if (dLname) { await dLname.click({ clickCount: 3 }); await dLname.type(data.lastName); }
-    const dobParts = data.dob.split('/');
-    const dobInputs = await page.$$('input[id*="DOB"], input[id*="Dob"], input[name*="DOB"]');
-    if (dobInputs.length >= 3) {
-      await dobInputs[0].click({ clickCount: 3 }); await dobInputs[0].type(dobParts[0] || '01');
-      await dobInputs[1].click({ clickCount: 3 }); await dobInputs[1].type(dobParts[1] || '01');
-      await dobInputs[2].click({ clickCount: 3 }); await dobInputs[2].type(dobParts[2] || '1990');
-    }
-    await page.select('select[id*="Gender"], select[name*="Gender"]', data.gender).catch(() => {});
-    await page.select('select[id*="Marital"], select[name*="Marital"]', data.maritalStatus).catch(() => {});
-    await page.select('select[id*="LicenseState"], select[name*="LicenseState"]', data.state).catch(() => {});
-    await page.click('input[value="Next"], button[value="Next"]').catch(() => page.click('input[type="submit"]'));
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    await page.waitForTimeout(1000);
-    const nextBtn = await page.$('input[value="Next"], button[value="Next"]');
-    if (nextBtn) {
-      await nextBtn.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    }
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
     console.log('Step 2 done:', page.url());
 
-    // STEP 3
-    console.log('Step 3: Vehicle...');
-    await page.waitForTimeout(1500);
-    await page.click('input[value*="year"], input[value*="Year"]').catch(() => {});
-    await page.select('select[id*="Year"], select[name*="Year"]', String(data.vehicleYear)).catch(() => {});
-    await page.waitForTimeout(800);
-    await page.select('select[id*="Make"], select[name*="Make"]', data.vehicleMake).catch(() => {});
-    await page.waitForTimeout(800);
-    await page.select('select[id*="Model"], select[name*="Model"]', data.vehicleModel).catch(() => {});
-    await page.waitForTimeout(800);
-    const bodyStyleSel = await page.$('select[id*="BodyStyle"], select[name*="BodyStyle"]');
-    if (bodyStyleSel) {
-      const firstOpt = await page.evaluate(sel => {
-        const opts = sel.querySelectorAll('option');
-        return opts.length > 1 ? opts[1].value : '';
-      }, bodyStyleSel);
-      if (firstOpt) await page.select('select[id*="BodyStyle"], select[name*="BodyStyle"]', firstOpt);
-    }
-    const inspSel = await page.$('select[id*="Inspection"], select[name*="Inspection"]');
-    if (inspSel) {
-      const firstOpt = await page.evaluate(sel => {
-        const opts = sel.querySelectorAll('option');
-        return opts.length > 1 ? opts[1].value : '';
-      }, inspSel);
-      if (firstOpt) await page.select('select[id*="Inspection"], select[name*="Inspection"]', firstOpt);
-    }
-    await page.click('input[value="Owned"]').catch(() => {});
-    await page.click('input[value="FullCoverage"], input[value="Full"]').catch(() => {});
-    await page.click('input[value="No"]').catch(() => {});
-    const purchaseInputs = await page.$$('input[id*="Purchase"], input[name*="Purchase"]');
-    if (purchaseInputs.length >= 3) {
-      await purchaseInputs[0].click({ clickCount: 3 }); await purchaseInputs[0].type('01');
-      await purchaseInputs[1].click({ clickCount: 3 }); await purchaseInputs[1].type('01');
-      await purchaseInputs[2].click({ clickCount: 3 }); await purchaseInputs[2].type(String(data.vehicleYear));
-    }
-    await page.click('input[value="Next"], button[value="Next"]').catch(() => page.click('input[type="submit"]'));
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    console.log('Step 3...');
+    await page.waitForTimeout(2000);
+    await page.evaluate((d) => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value&&r.value.toLowerCase().includes('year')) r.click(); });
+    }, data);
+    await page.evaluate((year) => {
+      document.querySelectorAll('select').forEach(sel => {
+        if((sel.id||'').toLowerCase().includes('year')) { sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+    }, String(data.vehicleYear));
     await page.waitForTimeout(1000);
-    const vNextBtn = await page.$('input[value="Next"], button[value="Next"]');
-    if (vNextBtn) {
-      await vNextBtn.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    }
+    await page.evaluate((make) => {
+      document.querySelectorAll('select').forEach(sel => {
+        if((sel.id||'').toLowerCase().includes('make')) { sel.value=make; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+    }, data.vehicleMake.toUpperCase());
+    await page.waitForTimeout(1000);
+    await page.evaluate((model) => {
+      document.querySelectorAll('select').forEach(sel => {
+        if((sel.id||'').toLowerCase().includes('model')) {
+          for(const opt of sel.options) { if(opt.text.toLowerCase().includes(model.toLowerCase())) { sel.value=opt.value; break; } }
+          sel.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+      });
+    }, data.vehicleModel);
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => {
+      document.querySelectorAll('select').forEach(sel => {
+        const id=(sel.id||'').toLowerCase();
+        if(id.includes('body')&&sel.options.length>1) { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('inspect')&&sel.options.length>1) { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      document.querySelectorAll('input[type="radio"]').forEach(r => {
+        if(r.value==='Owned') r.click();
+        if(r.value&&r.value.toLowerCase().includes('full')) r.click();
+      });
+      document.querySelectorAll('input[type="radio"][value="No"]').forEach(r => r.click());
+    });
+    await page.waitForTimeout(500);
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
+    await page.waitForTimeout(1500);
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
     console.log('Step 3 done:', page.url());
 
-    // STEP 4
     console.log('Step 4: Incidents...');
     await page.waitForTimeout(1000);
-    await page.click('input[value="Next"], button[value="Next"]').catch(() => page.click('input[type="submit"]'));
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
     console.log('Step 4 done:', page.url());
 
-    // STEP 5
-    console.log('Step 5: Final page...');
-    await page.waitForTimeout(1500);
-    await page.select('select[id*="Residence"], select[name*="Residence"]', 'OwnHome').catch(() => {});
-    const today = new Date();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const yyyy = String(today.getFullYear());
-    const startInputs = await page.$$('input[id*="PolicyStart"], input[id*="EffectiveDate"], input[name*="Start"]');
-    if (startInputs.length >= 3) {
-      await startInputs[0].click({ clickCount: 3 }); await startInputs[0].type(mm);
-      await startInputs[1].click({ clickCount: 3 }); await startInputs[1].type(dd);
-      await startInputs[2].click({ clickCount: 3 }); await startInputs[2].type(yyyy);
-    }
-    await page.select('select[id*="Duration"], select[name*="Duration"]', '6').catch(() => {});
-    await page.select('select[id*="CurrentInsurer"], select[name*="CurrentInsurer"]', data.currentInsurer || 'None').catch(() => {});
-    const expInputs = await page.$$('input[id*="Expir"], input[id*="Renew"], input[name*="Expir"]');
-    if (expInputs.length >= 3) {
-      await expInputs[0].click({ clickCount: 3 }); await expInputs[0].type(mm);
-      await expInputs[1].click({ clickCount: 3 }); await expInputs[1].type(dd);
-      await expInputs[2].click({ clickCount: 3 }); await expInputs[2].type(yyyy);
-    }
-    const yesRadios = await page.$$('input[type="radio"][value="Yes"]');
-    for (const radio of yesRadios) {
-      await radio.click().catch(() => {});
-    }
-    await page.click('input[type="submit"], button[type="submit"], input[value="Submit"]').catch(() => {});
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    console.log('Step 5: Final...');
+    await page.waitForTimeout(2000);
+    const today=new Date();
+    const mm=String(today.getMonth()+1).padStart(2,'0');
+    const dd=String(today.getDate()).padStart(2,'0');
+    const yyyy=String(today.getFullYear());
+    await page.evaluate((mm,dd,yyyy,insurer) => {
+      document.querySelectorAll('select').forEach(sel => {
+        const id=(sel.id||'').toLowerCase();
+        if(id.includes('resid')) { for(const o of sel.options){if(o.value.includes('Own')||o.value.includes('Home')){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('duration')) { sel.value='6'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('insur')) { for(const o of sel.options){if(o.text.toLowerCase().includes(insurer.toLowerCase())){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('start')||id.includes('effective')) { }
+        if(id.includes('expir')||id.includes('renew')) { }
+      });
+      document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r=>r.click());
+    }, mm, dd, yyyy, data.currentInsurer||'None');
+    await page.waitForTimeout(500);
+    await clickNext(page);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{});
     console.log('Submitted! Now on:', page.url());
 
-    // WAIT FOR QUOTES
     console.log('Waiting for quotes...');
-    let quotes = [];
-    let attempts = 0;
-    while (attempts < 12) {
+    let quotes=[];
+    let attempts=0;
+    while(attempts<12) {
       await page.waitForTimeout(5000);
       attempts++;
-      quotes = await page.evaluate(() => {
-        const rows = document.querySelectorAll('table tr');
-        const results = [];
-        rows.forEach(row => {
-          const img = row.querySelector('img');
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 3) {
-            const carrier = img ? img.alt : cells[0].innerText.trim();
-            const term = cells[1] ? cells[1].innerText.trim() : '';
-            const monthly = cells[2] ? cells[2].innerText.trim() : '';
-            if (carrier && monthly && monthly.includes('$')) {
-              results.push({ carrier, term, monthly });
-            }
+      quotes=await page.evaluate(()=>{
+        const rows=document.querySelectorAll('table tr');
+        const results=[];
+        rows.forEach(row=>{
+          const img=row.querySelector('img');
+          const cells=row.querySelectorAll('td');
+          if(cells.length>=3){
+            const carrier=img?img.alt:cells[0].innerText.trim();
+            const term=cells[1]?cells[1].innerText.trim():'';
+            const monthly=cells[2]?cells[2].innerText.trim():'';
+            if(carrier&&monthly&&monthly.includes('$')) results.push({carrier,term,monthly});
           }
         });
         return results;
       });
-      console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
-      if (quotes.length > 0) break;
+      console.log('Attempt '+attempts+': found '+quotes.length+' quotes');
+      if(quotes.length>0) break;
     }
 
     await browser.close();
+    if(quotes.length===0) return res.status(200).json({success:false,message:'Quotes still calculating.',quotes:[]});
+    console.log('Success! '+quotes.length+' quotes');
+    res.json({success:true,quotes});
 
-    if (quotes.length === 0) {
-      return res.status(200).json({ success: false, message: 'Quotes still calculating. Try again shortly.', quotes: [] });
-    }
-
-    console.log('Success! Returning ' + quotes.length + ' quotes');
-    res.json({ success: true, quotes });
-
-  } catch (err) {
-    console.error('Error:', err.message);
-    if (browser) await browser.close().catch(() => {});
-    res.status(500).json({ success: false, error: err.message });
+  } catch(err) {
+    console.error('Error:',err.message);
+    if(browser) await browser.close().catch(()=>{});
+    res.status(500).json({success:false,error:err.message});
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Server running on port ' + PORT));
+const PORT=process.env.PORT||3000;
+app.listen(PORT,()=>console.log('Server running on port '+PORT));
