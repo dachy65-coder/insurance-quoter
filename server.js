@@ -10,9 +10,29 @@ const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insur
 
 app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running' }));
 
-async function clickNext(page) {
+async function waitForText(page, text, timeout = 20000) {
+  try {
+    await page.waitForFunction(
+      (t) => document.body.innerText.includes(t),
+      { timeout },
+      text
+    );
+    return true;
+  } catch (e) {
+    console.log('Timeout waiting for text:', text);
+    return false;
+  }
+}
+
+async function clickSubmit(page) {
   await page.evaluate(() => {
-    const selectors = ['input[value="Continue"]','input[value="Next"]','input[value="Submit"]','input[type="submit"]','button[type="submit"]'];
+    const selectors = [
+      'input[value="Continue"]',
+      'input[value="Next"]', 
+      'input[value="Submit"]',
+      'input[type="submit"]',
+      'button[type="submit"]'
+    ];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (el) { el.click(); return; }
@@ -33,12 +53,16 @@ app.post('/get-quote', async (req, res) => {
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
 
-    console.log('Step 1...');
+    // STEP 1
+    console.log('Step 1: Loading page...');
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.waitForTimeout(2000);
+    await waitForText(page, 'Getting Started');
+    console.log('Step 1: Page loaded, filling form...');
 
     await page.evaluate((d) => {
+      // Business = No
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      // Fill text fields
       document.querySelectorAll('input[type="text"],input[type="email"]').forEach(inp => {
         const id = (inp.id||'').toLowerCase();
         if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
@@ -48,23 +72,30 @@ app.post('/get-quote', async (req, res) => {
         if(id.includes('city')) { inp.value=d.city; inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('zip')) { inp.value=d.zip; inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-      const phoneInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i => (i.id||'').toLowerCase().includes('phone'));
+      // Phone
       const ph = d.phone.replace(/\D/g,'');
-      if(phoneInputs.length>=3) { phoneInputs[0].value=ph.slice(0,3); phoneInputs[1].value=ph.slice(3,6); phoneInputs[2].value=ph.slice(6,10); phoneInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+      const phoneInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phoneInputs.length>=3) {
+        phoneInputs[0].value=ph.slice(0,3); phoneInputs[1].value=ph.slice(3,6); phoneInputs[2].value=ph.slice(6,10);
+        phoneInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));
+      }
+      // State
       document.querySelectorAll('select').forEach(sel => {
-        const id=(sel.id||'').toLowerCase();
-        if(id.includes('state')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if((sel.id||'').toLowerCase().includes('state')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
+      // Auto
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
 
-    await page.waitForTimeout(500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    console.log('Step 1 done:', page.url());
+    await page.waitForTimeout(1000);
+    await clickSubmit(page);
+    console.log('Step 1: Submitted, waiting for Driver page...');
+    await waitForText(page, 'Driver');
+    console.log('Step 1 done');
 
-    console.log('Step 2...');
-    await page.waitForTimeout(2000);
+    // STEP 2: Driver
+    console.log('Step 2: Filling driver...');
+    await page.waitForTimeout(1000);
     await page.evaluate((d) => {
       document.querySelectorAll('input[type="text"]').forEach(inp => {
         const id=(inp.id||'').toLowerCase();
@@ -82,30 +113,33 @@ app.post('/get-quote', async (req, res) => {
       });
     }, data);
     await page.waitForTimeout(500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    await page.waitForTimeout(1500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    console.log('Step 2 done:', page.url());
+    await clickSubmit(page);
+    await waitForText(page, 'Driver Summary');
+    console.log('Step 2: Driver submitted, clicking Next on summary...');
+    await page.waitForTimeout(500);
+    await clickSubmit(page);
+    await waitForText(page, 'Vehicle');
+    console.log('Step 2 done');
 
-    console.log('Step 3...');
-    await page.waitForTimeout(2000);
+    // STEP 3: Vehicle
+    console.log('Step 3: Filling vehicle...');
+    await page.waitForTimeout(1000);
     await page.evaluate((d) => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value&&r.value.toLowerCase().includes('year')) r.click(); });
     }, data);
+    await page.waitForTimeout(500);
     await page.evaluate((year) => {
       document.querySelectorAll('select').forEach(sel => {
         if((sel.id||'').toLowerCase().includes('year')) { sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, String(data.vehicleYear));
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
     await page.evaluate((make) => {
       document.querySelectorAll('select').forEach(sel => {
         if((sel.id||'').toLowerCase().includes('make')) { sel.value=make; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data.vehicleMake.toUpperCase());
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
     await page.evaluate((model) => {
       document.querySelectorAll('select').forEach(sel => {
         if((sel.id||'').toLowerCase().includes('model')) {
@@ -125,24 +159,26 @@ app.post('/get-quote', async (req, res) => {
         if(r.value==='Owned') r.click();
         if(r.value&&r.value.toLowerCase().includes('full')) r.click();
       });
-      document.querySelectorAll('input[type="radio"][value="No"]').forEach(r => r.click());
     });
     await page.waitForTimeout(500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    await page.waitForTimeout(1500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    console.log('Step 3 done:', page.url());
+    await clickSubmit(page);
+    await waitForText(page, 'Vehicle Summary');
+    console.log('Step 3: Vehicle submitted, clicking Next on summary...');
+    await page.waitForTimeout(500);
+    await clickSubmit(page);
+    await waitForText(page, 'Incident');
+    console.log('Step 3 done');
 
+    // STEP 4: Incidents
     console.log('Step 4: Incidents...');
-    await page.waitForTimeout(1000);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(()=>{});
-    console.log('Step 4 done:', page.url());
+    await page.waitForTimeout(500);
+    await clickSubmit(page);
+    await waitForText(page, 'Almost Done');
+    console.log('Step 4 done');
 
-    console.log('Step 5: Final...');
-    await page.waitForTimeout(2000);
+    // STEP 5: Final
+    console.log('Step 5: Final page...');
+    await page.waitForTimeout(1500);
     const today=new Date();
     const mm=String(today.getMonth()+1).padStart(2,'0');
     const dd=String(today.getDate()).padStart(2,'0');
@@ -151,57 +187,82 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
         if(id.includes('resid')) { for(const o of sel.options){if(o.value.includes('Own')||o.value.includes('Home')){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('duration')) { sel.value='6'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('insur')) { for(const o of sel.options){if(o.text.toLowerCase().includes(insurer.toLowerCase())){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('duration')) { for(const o of sel.options){if(o.value==='6'||o.text.includes('6')){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('insur')||id.includes('carrier')) {
+          for(const o of sel.options){if(o.text.toLowerCase().includes(insurer.toLowerCase())){sel.value=o.value;break;}}
+          sel.dispatchEvent(new Event('change',{bubbles:true}));
+        }
       });
-      document.querySelectorAll('input[type="text"]').forEach(inp => {
-        const id=(inp.id||'').toLowerCase();
-        if(id.includes('start')||id.includes('effective')) { }
-        if(id.includes('expir')||id.includes('renew')) { }
+      // Date fields
+      const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
+      const startInputs = allInputs.filter(i=>(i.id||'').toLowerCase().includes('start')||(i.id||'').toLowerCase().includes('effective'));
+      const expInputs = allInputs.filter(i=>(i.id||'').toLowerCase().includes('expir')||(i.id||'').toLowerCase().includes('renew'));
+      [startInputs, expInputs].forEach(inputs => {
+        if(inputs.length>=3) { inputs[0].value=mm; inputs[1].value=dd; inputs[2].value=yyyy; inputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
       });
+      // Acknowledgements
       document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r=>r.click());
     }, mm, dd, yyyy, data.currentInsurer||'None');
-    await page.waitForTimeout(500);
-    await clickNext(page);
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{});
-    console.log('Submitted! Now on:', page.url());
 
-    console.log('Waiting for quotes...');
-    let quotes=[];
-    let attempts=0;
-    while(attempts<12) {
+    await page.waitForTimeout(1000);
+    await clickSubmit(page);
+    console.log('Step 5: Submitted, waiting for Quote Summary...');
+    await waitForText(page, 'Quote Summary', 30000);
+    console.log('Reached Quote Summary page!');
+
+    // Wait for quotes to load and scrape
+    let quotes = [];
+    let attempts = 0;
+    while (attempts < 15) {
       await page.waitForTimeout(5000);
       attempts++;
-      quotes=await page.evaluate(()=>{
-        const rows=document.querySelectorAll('table tr');
-        const results=[];
-        rows.forEach(row=>{
-          const img=row.querySelector('img');
-          const cells=row.querySelectorAll('td');
-          if(cells.length>=3){
-            const carrier=img?img.alt:cells[0].innerText.trim();
-            const term=cells[1]?cells[1].innerText.trim():'';
-            const monthly=cells[2]?cells[2].innerText.trim():'';
-            if(carrier&&monthly&&monthly.includes('$')) results.push({carrier,term,monthly});
+
+      // Get full page text for debugging
+      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+      console.log('Page text sample:', pageText.replace(/\n/g,' '));
+
+      quotes = await page.evaluate(() => {
+        const results = [];
+        // Try multiple table structures
+        document.querySelectorAll('table tr').forEach(row => {
+          const img = row.querySelector('img');
+          const cells = row.querySelectorAll('td');
+          if (cells.length >= 2) {
+            const carrier = img ? img.alt : cells[0].innerText.trim();
+            const text = row.innerText;
+            const match = text.match(/\$[\d,]+\.?\d*/g);
+            if (carrier && carrier.length > 2 && match && match.length > 0) {
+              const monthly = match[match.length-1];
+              const term = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : '';
+              results.push({ carrier: carrier.trim(), term, monthly });
+            }
           }
         });
         return results;
       });
-      console.log('Attempt '+attempts+': found '+quotes.length+' quotes');
-      if(quotes.length>0) break;
+
+      console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
+      if (quotes.length > 0) break;
+
+      // Check if still calculating
+      const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
+      if (!stillCalc && attempts > 3) {
+        console.log('Page no longer calculating but no quotes found');
+        break;
+      }
     }
 
     await browser.close();
-    if(quotes.length===0) return res.status(200).json({success:false,message:'Quotes still calculating.',quotes:[]});
-    console.log('Success! '+quotes.length+' quotes');
-    res.json({success:true,quotes});
+    if (quotes.length === 0) return res.status(200).json({ success: false, message: 'Quotes still calculating. Please try again in a moment.', quotes: [] });
+    console.log('Success! ' + quotes.length + ' quotes found');
+    res.json({ success: true, quotes });
 
   } catch(err) {
-    console.error('Error:',err.message);
+    console.error('Error:', err.message);
     if(browser) await browser.close().catch(()=>{});
-    res.status(500).json({success:false,error:err.message});
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log('Server running on port '+PORT));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('Server running on port ' + PORT));
