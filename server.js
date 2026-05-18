@@ -175,24 +175,82 @@ app.post('/get-quote', async (req, res) => {
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
+// STEP 5: Final
+console.log('Step 5: Final page...');
+await page.waitForTimeout(1500);
+const today = new Date();
+const mm = String(today.getMonth() + 1).padStart(2, '0');
+const dd = String(today.getDate()).padStart(2, '0');
+const yyyy = String(today.getFullYear());
 
-    // STEP 5: Final
-    console.log('Step 5: Final page...');
-    await page.waitForTimeout(1500);
-    const today=new Date();
-    const mm=String(today.getMonth()+1).padStart(2,'0');
-    const dd=String(today.getDate()).padStart(2,'0');
-    const yyyy=String(today.getFullYear());
-    await page.evaluate((mm,dd,yyyy,insurer) => {
-      document.querySelectorAll('select').forEach(sel => {
-        const id=(sel.id||'').toLowerCase();
-        if(id.includes('resid')) { for(const o of sel.options){if(o.value.includes('Own')||o.value.includes('Home')){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('duration')) { for(const o of sel.options){if(o.value==='6'||o.text.includes('6')){sel.value=o.value;break;}} sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('insur')||id.includes('carrier')) {
-          for(const o of sel.options){if(o.text.toLowerCase().includes(insurer.toLowerCase())){sel.value=o.value;break;}}
-          sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-      });
+await page.evaluate((mm, dd, yyyy, insurer, data) => {
+  // Fill text/email/tel input fields
+  const fieldMap = {
+    'first': data.firstName,
+    'fname': data.firstName,
+    'last': data.lastName,
+    'lname': data.lastName,
+    'address': data.address,
+    'city': data.city,
+    'zip': data.zip,
+    'postal': data.zip,
+    'email': data.email,
+    'phone': data.phone,
+  };
+
+  document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type])').forEach(input => {
+    const id = (input.id || input.name || '').toLowerCase();
+    for (const [key, value] of Object.entries(fieldMap)) {
+      if (id.includes(key) && value) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        break;
+      }
+    }
+  });
+
+  // Fill select dropdowns
+  document.querySelectorAll('select').forEach(sel => {
+    const id = (sel.id || '').toLowerCase();
+
+    if (id.includes('state')) {
+      for (const o of sel.options) {
+        if (o.value === data.state || o.text === data.state) { sel.value = o.value; break; }
+      }
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (id.includes('resid')) {
+      for (const o of sel.options) {
+        if (o.value.includes('Own') || o.value.includes('Home')) { sel.value = o.value; break; }
+      }
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (id.includes('duration')) {
+      for (const o of sel.options) {
+        if (o.value === '6' || o.text.includes('6')) { sel.value = o.value; break; }
+      }
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (id.includes('insur') || id.includes('carrier')) {
+      for (const o of sel.options) {
+        if (o.text.toLowerCase().includes(insurer.toLowerCase())) { sel.value = o.value; break; }
+      }
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+}, mm, dd, yyyy, insurer, {
+  firstName: body.firstName,
+  lastName: body.lastName,
+  address: body.address,
+  city: body.city,
+  state: body.state,
+  zip: body.zip,
+  email: body.email,
+  phone: body.phone,
+});
+// Date fields
       // Date fields
       const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
       const startInputs = allInputs.filter(i=>(i.id||'').toLowerCase().includes('start')||(i.id||'').toLowerCase().includes('effective'));
