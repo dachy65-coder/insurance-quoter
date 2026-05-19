@@ -1,4 +1,5 @@
-console.log("### NEW FIXED SERVER LOADED ###");
+console.log("### SERVER LOADED: corrected-clean-v2 ###");
+
 const express = require("express");
 const cors = require("cors");
 const puppeteer = require("puppeteer");
@@ -11,7 +12,56 @@ const QUOTE_URL =
   "https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx";
 
 app.get("/", (req, res) => {
-  res.json({ status: "Insurance Quoter Running", version: "fixed-quote-summary-check" });
+  res.json({
+    status: "Insurance Quoter Running",
+    version: "corrected-clean-v2"
+  });
+});
+
+app.get("/test", (req, res) => {
+  res.send(`
+    <html>
+      <body style="font-family:Arial;padding:40px">
+        <h1>Insurance Quote Test</h1>
+        <button onclick="runQuote()" style="padding:15px 25px;font-size:18px">
+          Test Quote
+        </button>
+        <pre id="result" style="background:#f4f4f4;padding:20px;margin-top:20px;white-space:pre-wrap"></pre>
+
+        <script>
+          async function runQuote() {
+            document.getElementById("result").innerText = "Loading...";
+
+            const response = await fetch("/get-quote", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                firstName: "David",
+                lastName: "Gulishvili",
+                email: "david@test.com",
+                phone: "9292928005",
+                address: "3050 Whitestone Expy",
+                city: "Flushing",
+                state: "NY",
+                zip: "11354",
+                dob: "01/01/1990",
+                gender: "M",
+                maritalStatus: "Single",
+                vehicleYear: "2020",
+                vehicleMake: "TOYOTA",
+                vehicleModel: "CAMRY",
+                currentInsurer: "GEICO"
+              })
+            });
+
+            const data = await response.json();
+            document.getElementById("result").innerText =
+              JSON.stringify(data, null, 2);
+          }
+        </script>
+      </body>
+    </html>
+  `);
 });
 
 async function waitForText(page, text, timeout = 20000) {
@@ -28,7 +78,7 @@ async function waitForText(page, text, timeout = 20000) {
   }
 }
 
-async function pageText(page, limit = 3000) {
+async function pageText(page, limit = 5000) {
   return await page.evaluate((limit) => {
     return document.body.innerText.substring(0, limit);
   }, limit);
@@ -36,23 +86,20 @@ async function pageText(page, limit = 3000) {
 
 async function clickSubmit(page) {
   const clicked = await page.evaluate(() => {
-    const buttons = Array.from(
-      document.querySelectorAll("input, button, a")
-    );
+    const elements = Array.from(document.querySelectorAll("input, button, a"));
 
-    const btn = buttons.find((el) => {
-      const text = (
-        el.value ||
-        el.innerText ||
-        el.textContent ||
-        ""
-      ).trim().toLowerCase();
+    const btn = elements.find((el) => {
+      const text = (el.value || el.innerText || el.textContent || "")
+        .trim()
+        .toLowerCase();
 
       return (
         text === "continue" ||
         text === "next" ||
         text === "submit" ||
-        text.includes("continue")
+        text.includes("continue") ||
+        text.includes("next") ||
+        text.includes("submit")
       );
     });
 
@@ -64,18 +111,18 @@ async function clickSubmit(page) {
     return false;
   });
 
-  if (!clicked) {
-    throw new Error("No Continue/Submit button found");
-  }
+  if (!clicked) throw new Error("No Continue/Submit button found");
 }
 
 async function stopIfValidationError(page, stepName) {
-  const txt = await pageText(page, 4000);
+  const txt = await pageText(page, 5000);
 
   if (
     txt.includes("Please correct the items") ||
     txt.includes("highlighted") ||
-    txt.includes("Items marked with an asterisk")
+    txt.includes("Items marked with an asterisk") ||
+    txt.includes("valid email address") ||
+    txt.includes("valid phone number")
   ) {
     console.log("VALIDATION FAILED:", stepName);
     console.log(txt);
@@ -84,18 +131,178 @@ async function stopIfValidationError(page, stepName) {
   }
 }
 
+async function fillStep1(page, data) {
+  await page.evaluate((d) => {
+    const phone = String(d.phone || "").replace(/\D/g, "");
+
+    function fire(el) {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    function setValue(el, value) {
+      if (!el) return;
+      el.focus();
+      el.value = value || "";
+      fire(el);
+    }
+
+    function getTextNear(el) {
+      const row = el.closest("tr") || el.closest("div") || el.parentElement;
+      return String(row?.innerText || "").toLowerCase();
+    }
+
+    const inputs = Array.from(document.querySelectorAll("input"));
+
+    inputs.forEach((inp) => {
+      const key = String(
+        (inp.id || "") +
+          " " +
+          (inp.name || "") +
+          " " +
+          (inp.placeholder || "") +
+          " " +
+          getTextNear(inp)
+      ).toLowerCase();
+
+      if (inp.type === "text" || inp.type === "email") {
+        if (key.includes("first name")) {
+          setValue(inp, d.firstName);
+        } else if (key.includes("last name")) {
+          setValue(inp, d.lastName);
+        } else if (key.includes("email")) {
+          setValue(inp, d.email || "david@test.com");
+        } else if (key.includes("home phone") || key.includes("phone")) {
+          setValue(
+            inp,
+            phone.slice(0, 3) + "-" + phone.slice(3, 6) + "-" + phone.slice(6, 10)
+          );
+        } else if (key.includes("address") && !key.includes("email")) {
+          setValue(inp, d.address);
+        } else if (key.includes("zip")) {
+          setValue(inp, d.zip);
+        } else if (key.includes("city")) {
+          setValue(inp, d.city);
+        }
+      }
+    });
+
+    const phoneInputs = inputs.filter((inp) => {
+      const key = String(
+        (inp.id || "") +
+          " " +
+          (inp.name || "") +
+          " " +
+          (inp.placeholder || "") +
+          " " +
+          getTextNear(inp)
+      ).toLowerCase();
+
+      return key.includes("phone");
+    });
+
+    if (phoneInputs.length >= 3 && phone.length >= 10) {
+      setValue(phoneInputs[0], phone.slice(0, 3));
+      setValue(phoneInputs[1], phone.slice(3, 6));
+      setValue(phoneInputs[2], phone.slice(6, 10));
+    }
+
+    document.querySelectorAll("select").forEach((sel) => {
+      const key = String(
+        (sel.id || "") +
+          " " +
+          (sel.name || "") +
+          " " +
+          getTextNear(sel)
+      ).toLowerCase();
+
+      if (key.includes("state")) {
+        sel.value = d.state || "NY";
+        fire(sel);
+      }
+
+      if (key.includes("line of business")) {
+        for (const opt of sel.options) {
+          if (String(opt.text).toLowerCase().includes("auto")) {
+            sel.value = opt.value;
+            fire(sel);
+            break;
+          }
+        }
+      }
+    });
+
+    document.querySelectorAll("input[type='radio']").forEach((r) => {
+      const key = String(
+        (r.id || "") +
+          " " +
+          (r.name || "") +
+          " " +
+          (r.value || "") +
+          " " +
+          getTextNear(r)
+      ).toLowerCase();
+
+      const value = String(r.value || "").toLowerCase();
+
+      if (key.includes("are you a business") && value.includes("no")) r.click();
+      if (key.includes("line of business") && value.includes("auto")) r.click();
+      if (value === "no") r.click();
+      if (value === "auto") r.click();
+    });
+  }, data);
+}
+
+async function fillGenericFields(page, data) {
+  await page.evaluate((d) => {
+    function fire(el) {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    function setValue(el, value) {
+      if (!el) return;
+      el.focus();
+      el.value = value || "";
+      fire(el);
+    }
+
+    document.querySelectorAll("input[type='text'], input[type='email']").forEach((inp) => {
+      const key = String((inp.id || "") + " " + (inp.name || "")).toLowerCase();
+
+      if (key.includes("firstname")) setValue(inp, d.firstName);
+      else if (key.includes("lastname")) setValue(inp, d.lastName);
+      else if (key.includes("email")) setValue(inp, d.email);
+      else if (key.includes("address")) setValue(inp, d.address);
+      else if (key.includes("city")) setValue(inp, d.city);
+      else if (key.includes("zip")) setValue(inp, d.zip);
+    });
+
+    document.querySelectorAll("select").forEach((sel) => {
+      const key = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
+
+      if (key.includes("state")) {
+        sel.value = d.state || "NY";
+        fire(sel);
+      }
+    });
+  }, data);
+}
+
 async function typeById(page, id, value) {
   if (!value) return;
 
-  const exists = await page.$("#" + id);
-  if (!exists) {
+  const el = await page.$("#" + id);
+  if (!el) {
     console.log("Missing field id:", id);
     return;
   }
 
-  await exists.click({ clickCount: 3 });
+  await el.click({ clickCount: 3 });
   await page.keyboard.press("Backspace");
-  await exists.type(String(value), { delay: 10 });
+  await el.type(String(value), { delay: 10 });
 }
 
 async function setSelectById(page, id, search) {
@@ -126,126 +333,6 @@ async function clickById(page, id) {
     const el = document.getElementById(id);
     if (el) el.click();
   }, id);
-}
-
-async function fillAllPossibleTextFields(page, data) {
-  await page.evaluate((d) => {
-    const phone = String(d.phone || "").replace(/\D/g, "");
-
-    function fire(el) {
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
-    }
-
-    function set(el, val) {
-      if (!el) return;
-      el.focus();
-      el.value = val || "";
-      fire(el);
-    }
-
-    function rowText(el) {
-      const row = el.closest("tr") || el.closest("div") || el.parentElement;
-      return String(row?.innerText || "").toLowerCase();
-    }
-
-    // Fill text/email fields by visible label row text
-    document.querySelectorAll("input").forEach((inp) => {
-      const text = rowText(inp);
-      const key = String(
-        (inp.id || "") + " " + (inp.name || "") + " " + text
-      ).toLowerCase();
-
-      if (inp.type === "text" || inp.type === "email") {
-        if (key.includes("first name")) set(inp, d.firstName);
-        else if (key.includes("last name")) set(inp, d.lastName);
-        else if (key.includes("email")) set(inp, d.email || "david@test.com");
-        else if (key.includes("address") && !key.includes("email")) set(inp, d.address);
-        else if (key.includes("city")) set(inp, d.city);
-        else if (key.includes("zip")) set(inp, d.zip);
-        else if (key.includes("phone")) {
-          set(inp, `${phone.slice(0,3)}-${phone.slice(3,6)}-${phone.slice(6,10)}`);
-        }
-      }
-    });
-
-    // Extra phone handling
-    const phoneInputs = Array.from(document.querySelectorAll("input")).filter((inp) => {
-      const key = String((inp.id || "") + " " + (inp.name || "") + " " + rowText(inp)).toLowerCase();
-      return key.includes("phone");
-    });
-
-    if (phoneInputs.length >= 3) {
-      set(phoneInputs[0], phone.slice(0, 3));
-      set(phoneInputs[1], phone.slice(3, 6));
-      set(phoneInputs[2], phone.slice(6, 10));
-    }
-
-    // Select dropdowns
-    document.querySelectorAll("select").forEach((sel) => {
-      const text = rowText(sel);
-      const key = String((sel.id || "") + " " + (sel.name || "") + " " + text).toLowerCase();
-
-      if (key.includes("state")) {
-        sel.value = d.state || "NY";
-        fire(sel);
-      }
-
-      if (key.includes("line of business")) {
-        for (const opt of sel.options) {
-          if (String(opt.text).toLowerCase().includes("auto")) {
-            sel.value = opt.value;
-            fire(sel);
-            break;
-          }
-        }
-      }
-    });
-
-    // Radio buttons by row text
-    document.querySelectorAll("input[type='radio']").forEach((r) => {
-      const text = rowText(r);
-      const value = String(r.value || "").toLowerCase();
-
-      if (text.includes("are you a business") && value.includes("no")) r.click();
-      if (text.includes("line of business") && value.includes("auto")) r.click();
-    });
-  }, data);
-}
-  await page.evaluate((d) => {
-    const phone = String(d.phone || "").replace(/\D/g, "");
-
-    document.querySelectorAll("input[type='text'], input[type='email']").forEach((inp) => {
-      const id = String(inp.id || "").toLowerCase();
-      const name = String(inp.name || "").toLowerCase();
-
-      const key = id + " " + name;
-
-      if (key.includes("firstname") || key.includes("first_name")) inp.value = d.firstName || "";
-      else if (key.includes("lastname") || key.includes("last_name")) inp.value = d.lastName || "";
-      else if (key.includes("email")) inp.value = d.email || "";
-      else if (key.includes("address") && !key.includes("email")) inp.value = d.address || "";
-      else if (key.includes("city")) inp.value = d.city || "";
-      else if (key.includes("zip")) inp.value = d.zip || "";
-      else if (key.includes("phone") && phone.length >= 10) inp.value = phone;
-
-      inp.dispatchEvent(new Event("input", { bubbles: true }));
-      inp.dispatchEvent(new Event("change", { bubbles: true }));
-      inp.dispatchEvent(new Event("blur", { bubbles: true }));
-    });
-
-    document.querySelectorAll("select").forEach((sel) => {
-      const id = String(sel.id || "").toLowerCase();
-      const name = String(sel.name || "").toLowerCase();
-      const key = id + " " + name;
-
-      if (key.includes("state")) {
-        sel.value = d.state || sel.value;
-        sel.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-    });
-  }, data);
 }
 
 async function fillFinalApplicantPage(page, data) {
@@ -285,13 +372,118 @@ async function fillFinalApplicantPage(page, data) {
   await clickById(page, "PolicyInfo_CreditCheckAuth_Yes");
   await clickById(page, "Applicant_TermsAcceptance_Yes");
   await clickById(page, "Applicant_QuoteAccuracyAcceptance_Yes");
+}
 
-  await fillAllPossibleTextFields(page, data);
+async function selectVehicle(page, data) {
+  await page.evaluate((d) => {
+    function fire(el) {
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function selectMatch(sel, search) {
+      const s = String(search || "").toLowerCase();
+
+      for (const opt of sel.options) {
+        if (
+          String(opt.text).toLowerCase().includes(s) ||
+          String(opt.value).toLowerCase().includes(s)
+        ) {
+          sel.value = opt.value;
+          fire(sel);
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    document.querySelectorAll("select").forEach((sel) => {
+      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
+
+      if (k.includes("year")) selectMatch(sel, d.vehicleYear);
+    });
+  }, data);
+
+  await page.waitForTimeout(1500);
+
+  await page.evaluate((d) => {
+    function fire(el) {
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function selectMatch(sel, search) {
+      const s = String(search || "").toLowerCase();
+
+      for (const opt of sel.options) {
+        if (
+          String(opt.text).toLowerCase().includes(s) ||
+          String(opt.value).toLowerCase().includes(s)
+        ) {
+          sel.value = opt.value;
+          fire(sel);
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    document.querySelectorAll("select").forEach((sel) => {
+      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
+
+      if (k.includes("make")) selectMatch(sel, d.vehicleMake);
+    });
+  }, data);
+
+  await page.waitForTimeout(1500);
+
+  await page.evaluate((d) => {
+    function fire(el) {
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function selectMatch(sel, search) {
+      const s = String(search || "").toLowerCase();
+
+      for (const opt of sel.options) {
+        if (
+          String(opt.text).toLowerCase().includes(s) ||
+          String(opt.value).toLowerCase().includes(s)
+        ) {
+          sel.value = opt.value;
+          fire(sel);
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    document.querySelectorAll("select").forEach((sel) => {
+      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
+
+      if (k.includes("model")) selectMatch(sel, d.vehicleModel);
+      else if (k.includes("body") && sel.options.length > 1) sel.value = sel.options[1].value;
+      else if (k.includes("inspect") && sel.options.length > 1) sel.value = sel.options[1].value;
+      else if (sel.options.length > 1 && !sel.value) sel.value = sel.options[1].value;
+
+      fire(sel);
+    });
+
+    document.querySelectorAll("input[type='radio']").forEach((r) => {
+      const v = String(r.value || "").toLowerCase();
+
+      if (v.includes("own")) r.click();
+      if (v.includes("pleasure")) r.click();
+      if (v.includes("commute")) r.click();
+      if (v.includes("full")) r.click();
+      if (v === "no") r.click();
+    });
+  }, data);
 }
 
 app.post("/get-quote", async (req, res) => {
   const data = req.body;
-
   let browser;
 
   console.log("Quote request:", data.firstName, data.lastName);
@@ -303,7 +495,8 @@ app.post("/get-quote", async (req, res) => {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu"
+        "--disable-gpu",
+        "--no-zygote"
       ]
     });
 
@@ -323,21 +516,16 @@ app.post("/get-quote", async (req, res) => {
     await waitForText(page, "Getting Started", 30000);
 
     console.log("Step 1: Filling page...");
-    await fillAllPossibleTextFields(page, data);
+    await fillStep1(page, data);
 
-    await page.evaluate(() => {
-      document.querySelectorAll("input[type='radio']").forEach((r) => {
-        if (r.value === "No") r.click();
-        if (r.value === "Auto") r.click();
-      });
-    });
-
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
     await clickSubmit(page);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(2500);
+
     await stopIfValidationError(page, "Step 1");
 
     const driverReached = await waitForText(page, "Driver", 30000);
+
     if (!driverReached) {
       const txt = await pageText(page);
       console.log("Did not reach Driver page:");
@@ -348,14 +536,14 @@ app.post("/get-quote", async (req, res) => {
     console.log("Step 1 done");
 
     console.log("Step 2: Filling driver...");
-    await fillAllPossibleTextFields(page, data);
+    await fillGenericFields(page, data);
 
     await page.evaluate((d) => {
       const dob = String(d.dob || "01/01/1990").split("/");
 
       const inputs = Array.from(document.querySelectorAll("input[type='text']"));
       const dobInputs = inputs.filter((i) => {
-        const k = String(i.id || i.name || "").toLowerCase();
+        const k = String((i.id || "") + " " + (i.name || "")).toLowerCase();
         return k.includes("dob") || k.includes("birth");
       });
 
@@ -363,6 +551,7 @@ app.post("/get-quote", async (req, res) => {
         dobInputs[0].value = dob[0] || "01";
         dobInputs[1].value = dob[1] || "01";
         dobInputs[2].value = dob[2] || "1990";
+
         dobInputs.forEach((i) => {
           i.dispatchEvent(new Event("input", { bubbles: true }));
           i.dispatchEvent(new Event("change", { bubbles: true }));
@@ -371,7 +560,7 @@ app.post("/get-quote", async (req, res) => {
       }
 
       document.querySelectorAll("select").forEach((sel) => {
-        const k = String(sel.id || sel.name || "").toLowerCase();
+        const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
 
         if (k.includes("gender") && sel.options.length > 1) {
           sel.value = d.gender || sel.options[1].value;
@@ -389,12 +578,14 @@ app.post("/get-quote", async (req, res) => {
       });
     }, data);
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
     await clickSubmit(page);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(2500);
+
     await stopIfValidationError(page, "Step 2 Driver");
 
     const driverSummary = await waitForText(page, "Driver Summary", 15000);
+
     if (driverSummary) {
       await clickSubmit(page);
       await page.waitForTimeout(2000);
@@ -402,6 +593,7 @@ app.post("/get-quote", async (req, res) => {
     }
 
     const vehicleReached = await waitForText(page, "Vehicle", 30000);
+
     if (!vehicleReached) {
       const txt = await pageText(page);
       console.log("Did not reach Vehicle page:");
@@ -412,101 +604,16 @@ app.post("/get-quote", async (req, res) => {
     console.log("Step 2 done");
 
     console.log("Step 3: Filling vehicle...");
-
-    await page.evaluate((d) => {
-      function selectMatch(sel, search) {
-        const s = String(search || "").toLowerCase();
-        for (const opt of sel.options) {
-          if (
-            String(opt.text).toLowerCase().includes(s) ||
-            String(opt.value).toLowerCase().includes(s)
-          ) {
-            sel.value = opt.value;
-            sel.dispatchEvent(new Event("change", { bubbles: true }));
-            return true;
-          }
-        }
-        return false;
-      }
-
-      document.querySelectorAll("select").forEach((sel) => {
-        const k = String(sel.id || sel.name || "").toLowerCase();
-
-        if (k.includes("year")) selectMatch(sel, d.vehicleYear);
-      });
-    }, data);
+    await selectVehicle(page, data);
 
     await page.waitForTimeout(1500);
-
-    await page.evaluate((d) => {
-      function selectMatch(sel, search) {
-        const s = String(search || "").toLowerCase();
-        for (const opt of sel.options) {
-          if (
-            String(opt.text).toLowerCase().includes(s) ||
-            String(opt.value).toLowerCase().includes(s)
-          ) {
-            sel.value = opt.value;
-            sel.dispatchEvent(new Event("change", { bubbles: true }));
-            return true;
-          }
-        }
-        return false;
-      }
-
-      document.querySelectorAll("select").forEach((sel) => {
-        const k = String(sel.id || sel.name || "").toLowerCase();
-
-        if (k.includes("make")) selectMatch(sel, d.vehicleMake);
-      });
-    }, data);
-
-    await page.waitForTimeout(1500);
-
-    await page.evaluate((d) => {
-      function selectMatch(sel, search) {
-        const s = String(search || "").toLowerCase();
-        for (const opt of sel.options) {
-          if (
-            String(opt.text).toLowerCase().includes(s) ||
-            String(opt.value).toLowerCase().includes(s)
-          ) {
-            sel.value = opt.value;
-            sel.dispatchEvent(new Event("change", { bubbles: true }));
-            return true;
-          }
-        }
-        return false;
-      }
-
-      document.querySelectorAll("select").forEach((sel) => {
-        const k = String(sel.id || sel.name || "").toLowerCase();
-
-        if (k.includes("model")) selectMatch(sel, d.vehicleModel);
-        else if (k.includes("body") && sel.options.length > 1) sel.value = sel.options[1].value;
-        else if (k.includes("inspect") && sel.options.length > 1) sel.value = sel.options[1].value;
-        else if (sel.options.length > 1 && !sel.value) sel.value = sel.options[1].value;
-
-        sel.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-
-      document.querySelectorAll("input[type='radio']").forEach((r) => {
-        const v = String(r.value || "").toLowerCase();
-
-        if (v.includes("own")) r.click();
-        if (v.includes("pleasure")) r.click();
-        if (v.includes("commute")) r.click();
-        if (v.includes("full")) r.click();
-        if (v === "no") r.click();
-      });
-    }, data);
-
-    await page.waitForTimeout(1000);
     await clickSubmit(page);
     await page.waitForTimeout(2500);
+
     await stopIfValidationError(page, "Step 3 Vehicle");
 
     const vehicleSummary = await waitForText(page, "Vehicle Summary", 15000);
+
     if (vehicleSummary) {
       await clickSubmit(page);
       await page.waitForTimeout(2000);
@@ -514,6 +621,7 @@ app.post("/get-quote", async (req, res) => {
     }
 
     const incidentReached = await waitForText(page, "Incident", 30000);
+
     if (!incidentReached) {
       const txt = await pageText(page);
       console.log("Did not reach Incident page:");
@@ -524,6 +632,7 @@ app.post("/get-quote", async (req, res) => {
     console.log("Step 3 done");
 
     console.log("Step 4: Incidents...");
+
     await page.evaluate(() => {
       document.querySelectorAll("input[type='radio']").forEach((r) => {
         const v = String(r.value || "").toLowerCase();
@@ -533,10 +642,12 @@ app.post("/get-quote", async (req, res) => {
 
     await page.waitForTimeout(1000);
     await clickSubmit(page);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(2500);
+
     await stopIfValidationError(page, "Step 4 Incidents");
 
     const finalReached = await waitForText(page, "Almost Done", 30000);
+
     if (!finalReached) {
       const txt = await pageText(page);
       console.log("Did not reach Final page:");
@@ -551,26 +662,11 @@ app.post("/get-quote", async (req, res) => {
 
     await fillFinalApplicantPage(page, data);
 
-    const filled = await page.evaluate(() => ({
-      firstName: document.getElementById("Applicant_FirstName")?.value,
-      lastName: document.getElementById("Applicant_LastName")?.value,
-      address: document.getElementById("Applicant_AddressLine1")?.value,
-      city: document.getElementById("Applicant_City")?.value,
-      state: document.getElementById("Applicant_State")?.value,
-      zip: document.getElementById("Applicant_Zip")?.value,
-      email: document.getElementById("Applicant_Email")?.value,
-      credit: document.getElementById("PolicyInfo_CreditCheckAuth_Yes")?.checked,
-      terms: document.getElementById("Applicant_TermsAcceptance_Yes")?.checked,
-      accuracy: document.getElementById("Applicant_QuoteAccuracyAcceptance_Yes")?.checked
-    }));
-
-    console.log("Step 5 filled:", JSON.stringify(filled, null, 2));
-
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
     await clickSubmit(page);
     await page.waitForTimeout(3000);
 
-    const txtAfterFinalSubmit = await pageText(page, 4000);
+    const txtAfterFinalSubmit = await pageText(page, 5000);
 
     if (
       txtAfterFinalSubmit.includes("Please correct the items") ||
@@ -595,7 +691,7 @@ app.post("/get-quote", async (req, res) => {
     const reachedQuoteSummary = await waitForText(page, "Quote Summary", 60000);
 
     if (!reachedQuoteSummary) {
-      const txt = await pageText(page, 4000);
+      const txt = await pageText(page, 5000);
 
       console.log("FAILED BEFORE QUOTE SUMMARY:");
       console.log(txt);
@@ -630,7 +726,9 @@ app.post("/get-quote", async (req, res) => {
           const prices = text.match(/\$[\d,]+\.?\d*/g);
 
           if (cells.length >= 2 && prices && prices.length > 0) {
-            const carrier = img ? img.alt : cells[0].innerText.trim().split("\n")[0];
+            const carrier = img
+              ? img.alt
+              : cells[0].innerText.trim().split("\n")[0];
 
             results.push({
               carrier: carrier.trim(),
