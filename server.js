@@ -74,27 +74,51 @@ async function pageText(page, limit = 5000) {
 }
 
 async function clickSubmit(page) {
+  const beforeUrl = page.url();
+
   const clicked = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll("input, button"));
+    const candidates = Array.from(document.querySelectorAll("input, button"))
+      .filter((el) => {
+        const text = (el.value || el.innerText || el.textContent || "")
+          .trim()
+          .toLowerCase();
 
-    const btn = buttons.find((el) => {
-      const text = (el.value || el.innerText || el.textContent || "")
-        .trim()
-        .toLowerCase();
+        return (
+          text === "continue" ||
+          text === "next" ||
+          text === "submit"
+        );
+      });
 
-      return text === "continue" || text === "next" || text === "submit";
-    });
+    const btn = candidates[candidates.length - 1];
 
     if (btn) {
       btn.scrollIntoView({ block: "center" });
       btn.click();
-      return true;
+
+      return {
+        clicked: true,
+        tag: btn.tagName,
+        type: btn.type || "",
+        value: btn.value || btn.innerText || btn.textContent || "",
+        id: btn.id || "",
+        name: btn.name || ""
+      };
     }
 
-    return false;
+    return { clicked: false };
   });
 
-  if (!clicked) throw new Error("No real Continue/Submit button found");
+  console.log("Clicked submit:", JSON.stringify(clicked));
+  console.log("Before URL:", beforeUrl);
+
+  if (!clicked.clicked) {
+    throw new Error("No real Continue/Submit button found");
+  }
+
+  await page.waitForTimeout(2500);
+
+  console.log("After URL:", page.url());
 }
 
 async function stopIfValidationError(page, stepName) {
