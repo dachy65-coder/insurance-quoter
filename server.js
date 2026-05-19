@@ -43,7 +43,7 @@ async function clickSubmit(page) {
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
   const insurer = data.currentInsurer || 'None';
-  console.log('Quote request:', data.firstName, data.lastName);
+  console.log('Quote reqauest:', data.firstName, data.lastName);
   let browser;
   try {
     browser = await puppeteer.launch({
