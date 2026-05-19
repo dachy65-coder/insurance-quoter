@@ -1,21 +1,18 @@
-console.log("### SERVER LOADED: TEST 123 ###");
+console.log("### SERVER LOADED: corrected-clean-v3 ###");
 
 const express = require("express");
 const cors = require("cors");
-const puppeteer = requirae("puppeteer");
+const puppeteer = require("puppeteer");
 
 const app = express();
 app.use(cors());
-app.use(express.jsaon());
+app.use(express.json());
 
 const QUOTE_URL =
   "https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx";
 
 app.get("/", (req, res) => {
-  res.json({
-    status: "Insurance Quoter Running",
-    version: "corrected-clean-v2"
-  });
+  res.json({ status: "Insurance Quoter Running", version: "corrected-clean-v3" });
 });
 
 app.get("/test", (req, res) => {
@@ -23,15 +20,11 @@ app.get("/test", (req, res) => {
     <html>
       <body style="font-family:Arial;padding:40px">
         <h1>Insurance Quote Test</h1>
-        <button onclick="runQuote()" style="padding:15px 25px;font-size:18px">
-          Test Quote
-        </button>
+        <button onclick="runQuote()" style="padding:15px 25px;font-size:18px">Test Quote</button>
         <pre id="result" style="background:#f4f4f4;padding:20px;margin-top:20px;white-space:pre-wrap"></pre>
-
         <script>
           async function runQuote() {
             document.getElementById("result").innerText = "Loading...";
-
             const response = await fetch("/get-quote", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -53,10 +46,8 @@ app.get("/test", (req, res) => {
                 currentInsurer: "GEICO"
               })
             });
-
             const data = await response.json();
-            document.getElementById("result").innerText =
-              JSON.stringify(data, null, 2);
+            document.getElementById("result").innerText = JSON.stringify(data, null, 2);
           }
         </script>
       </body>
@@ -79,31 +70,23 @@ async function waitForText(page, text, timeout = 20000) {
 }
 
 async function pageText(page, limit = 5000) {
-  return await page.evaluate((limit) => {
-    return document.body.innerText.substring(0, limit);
-  }, limit);
+  return await page.evaluate((limit) => document.body.innerText.substring(0, limit), limit);
 }
 
 async function clickSubmit(page) {
   const clicked = await page.evaluate(() => {
-    const elements = Array.from(document.querySelectorAll("input, button, a"));
+    const buttons = Array.from(document.querySelectorAll("input, button"));
 
-    const btn = elements.find((el) => {
+    const btn = buttons.find((el) => {
       const text = (el.value || el.innerText || el.textContent || "")
         .trim()
         .toLowerCase();
 
-      return (
-        text === "continue" ||
-        text === "next" ||
-        text === "submit" ||
-        text.includes("continue") ||
-        text.includes("next") ||
-        text.includes("submit")
-      );
+      return text === "continue" || text === "next" || text === "submit";
     });
 
     if (btn) {
+      btn.scrollIntoView({ block: "center" });
       btn.click();
       return true;
     }
@@ -111,7 +94,7 @@ async function clickSubmit(page) {
     return false;
   });
 
-  if (!clicked) throw new Error("No Continue/Submit button found");
+  if (!clicked) throw new Error("No real Continue/Submit button found");
 }
 
 async function stopIfValidationError(page, stepName) {
@@ -126,7 +109,6 @@ async function stopIfValidationError(page, stepName) {
   ) {
     console.log("VALIDATION FAILED:", stepName);
     console.log(txt);
-
     throw new Error(stepName + " validation failed. Missing required fields.");
   }
 }
@@ -148,57 +130,30 @@ async function fillStep1(page, data) {
       fire(el);
     }
 
-    function getTextNear(el) {
+    function nearText(el) {
       const row = el.closest("tr") || el.closest("div") || el.parentElement;
       return String(row?.innerText || "").toLowerCase();
     }
 
-    const inputs = Array.from(document.querySelectorAll("input"));
-
-    inputs.forEach((inp) => {
+    Array.from(document.querySelectorAll("input")).forEach((inp) => {
       const key = String(
-        (inp.id || "") +
-          " " +
-          (inp.name || "") +
-          " " +
-          (inp.placeholder || "") +
-          " " +
-          getTextNear(inp)
+        (inp.id || "") + " " + (inp.name || "") + " " + (inp.placeholder || "") + " " + nearText(inp)
       ).toLowerCase();
 
       if (inp.type === "text" || inp.type === "email") {
-        if (key.includes("first name")) {
-          setValue(inp, d.firstName);
-        } else if (key.includes("last name")) {
-          setValue(inp, d.lastName);
-        } else if (key.includes("email")) {
-          setValue(inp, d.email || "david@test.com");
-        } else if (key.includes("home phone") || key.includes("phone")) {
-          setValue(
-            inp,
-            phone.slice(0, 3) + "-" + phone.slice(3, 6) + "-" + phone.slice(6, 10)
-          );
-        } else if (key.includes("address") && !key.includes("email")) {
-          setValue(inp, d.address);
-        } else if (key.includes("zip")) {
-          setValue(inp, d.zip);
-        } else if (key.includes("city")) {
-          setValue(inp, d.city);
-        }
+        if (key.includes("first name")) setValue(inp, d.firstName);
+        else if (key.includes("last name")) setValue(inp, d.lastName);
+        else if (key.includes("email")) setValue(inp, d.email || "david@test.com");
+        else if (key.includes("home phone") || key.includes("phone")) {
+          setValue(inp, phone.slice(0, 3) + "-" + phone.slice(3, 6) + "-" + phone.slice(6, 10));
+        } else if (key.includes("address") && !key.includes("email")) setValue(inp, d.address);
+        else if (key.includes("zip")) setValue(inp, d.zip);
+        else if (key.includes("city")) setValue(inp, d.city);
       }
     });
 
-    const phoneInputs = inputs.filter((inp) => {
-      const key = String(
-        (inp.id || "") +
-          " " +
-          (inp.name || "") +
-          " " +
-          (inp.placeholder || "") +
-          " " +
-          getTextNear(inp)
-      ).toLowerCase();
-
+    const phoneInputs = Array.from(document.querySelectorAll("input")).filter((inp) => {
+      const key = String((inp.id || "") + " " + (inp.name || "") + " " + nearText(inp)).toLowerCase();
       return key.includes("phone");
     });
 
@@ -208,14 +163,8 @@ async function fillStep1(page, data) {
       setValue(phoneInputs[2], phone.slice(6, 10));
     }
 
-    document.querySelectorAll("select").forEach((sel) => {
-      const key = String(
-        (sel.id || "") +
-          " " +
-          (sel.name || "") +
-          " " +
-          getTextNear(sel)
-      ).toLowerCase();
+    Array.from(document.querySelectorAll("select")).forEach((sel) => {
+      const key = String((sel.id || "") + " " + (sel.name || "") + " " + nearText(sel)).toLowerCase();
 
       if (key.includes("state")) {
         sel.value = d.state || "NY";
@@ -233,17 +182,8 @@ async function fillStep1(page, data) {
       }
     });
 
-    document.querySelectorAll("input[type='radio']").forEach((r) => {
-      const key = String(
-        (r.id || "") +
-          " " +
-          (r.name || "") +
-          " " +
-          (r.value || "") +
-          " " +
-          getTextNear(r)
-      ).toLowerCase();
-
+    Array.from(document.querySelectorAll("input[type='radio']")).forEach((r) => {
+      const key = String((r.id || "") + " " + (r.name || "") + " " + (r.value || "") + " " + nearText(r)).toLowerCase();
       const value = String(r.value || "").toLowerCase();
 
       if (key.includes("are you a business") && value.includes("no")) r.click();
@@ -269,7 +209,7 @@ async function fillGenericFields(page, data) {
       fire(el);
     }
 
-    document.querySelectorAll("input[type='text'], input[type='email']").forEach((inp) => {
+    Array.from(document.querySelectorAll("input[type='text'], input[type='email']")).forEach((inp) => {
       const key = String((inp.id || "") + " " + (inp.name || "")).toLowerCase();
 
       if (key.includes("firstname")) setValue(inp, d.firstName);
@@ -280,7 +220,7 @@ async function fillGenericFields(page, data) {
       else if (key.includes("zip")) setValue(inp, d.zip);
     });
 
-    document.querySelectorAll("select").forEach((sel) => {
+    Array.from(document.querySelectorAll("select")).forEach((sel) => {
       const key = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
 
       if (key.includes("state")) {
@@ -375,102 +315,61 @@ async function fillFinalApplicantPage(page, data) {
 }
 
 async function selectVehicle(page, data) {
-  await page.evaluate((d) => {
-    function fire(el) {
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    function selectMatch(sel, search) {
-      const s = String(search || "").toLowerCase();
-
-      for (const opt of sel.options) {
-        if (
-          String(opt.text).toLowerCase().includes(s) ||
-          String(opt.value).toLowerCase().includes(s)
-        ) {
-          sel.value = opt.value;
-          fire(sel);
-          return true;
+  async function selectByKeyword(keyword, value) {
+    await page.evaluate(
+      ({ keyword, value }) => {
+        function fire(el) {
+          el.dispatchEvent(new Event("change", { bubbles: true }));
         }
-      }
 
-      return false;
-    }
+        const s = String(value || "").toLowerCase();
 
-    document.querySelectorAll("select").forEach((sel) => {
-      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
+        Array.from(document.querySelectorAll("select")).forEach((sel) => {
+          const key = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
 
-      if (k.includes("year")) selectMatch(sel, d.vehicleYear);
-    });
-  }, data);
+          if (!key.includes(keyword)) return;
 
+          for (const opt of sel.options) {
+            if (
+              String(opt.text).toLowerCase().includes(s) ||
+              String(opt.value).toLowerCase().includes(s)
+            ) {
+              sel.value = opt.value;
+              fire(sel);
+              return;
+            }
+          }
+        });
+      },
+      { keyword, value }
+    );
+  }
+
+  await selectByKeyword("year", data.vehicleYear);
   await page.waitForTimeout(1500);
 
-  await page.evaluate((d) => {
-    function fire(el) {
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    function selectMatch(sel, search) {
-      const s = String(search || "").toLowerCase();
-
-      for (const opt of sel.options) {
-        if (
-          String(opt.text).toLowerCase().includes(s) ||
-          String(opt.value).toLowerCase().includes(s)
-        ) {
-          sel.value = opt.value;
-          fire(sel);
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    document.querySelectorAll("select").forEach((sel) => {
-      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
-
-      if (k.includes("make")) selectMatch(sel, d.vehicleMake);
-    });
-  }, data);
-
+  await selectByKeyword("make", data.vehicleMake);
   await page.waitForTimeout(1500);
 
-  await page.evaluate((d) => {
+  await selectByKeyword("model", data.vehicleModel);
+  await page.waitForTimeout(1500);
+
+  await page.evaluate(() => {
     function fire(el) {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
-    function selectMatch(sel, search) {
-      const s = String(search || "").toLowerCase();
+    Array.from(document.querySelectorAll("select")).forEach((sel) => {
+      const key = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
 
-      for (const opt of sel.options) {
-        if (
-          String(opt.text).toLowerCase().includes(s) ||
-          String(opt.value).toLowerCase().includes(s)
-        ) {
-          sel.value = opt.value;
-          fire(sel);
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    document.querySelectorAll("select").forEach((sel) => {
-      const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
-
-      if (k.includes("model")) selectMatch(sel, d.vehicleModel);
-      else if (k.includes("body") && sel.options.length > 1) sel.value = sel.options[1].value;
-      else if (k.includes("inspect") && sel.options.length > 1) sel.value = sel.options[1].value;
-      else if (sel.options.length > 1 && !sel.value) sel.value = sel.options[1].value;
+      if (key.includes("body") && sel.options.length > 1) sel.value = sel.options[1].value;
+      if (key.includes("inspect") && sel.options.length > 1) sel.value = sel.options[1].value;
+      if (sel.options.length > 1 && !sel.value) sel.value = sel.options[1].value;
 
       fire(sel);
     });
 
-    document.querySelectorAll("input[type='radio']").forEach((r) => {
+    Array.from(document.querySelectorAll("input[type='radio']")).forEach((r) => {
       const v = String(r.value || "").toLowerCase();
 
       if (v.includes("own")) r.click();
@@ -479,7 +378,7 @@ async function selectVehicle(page, data) {
       if (v.includes("full")) r.click();
       if (v === "no") r.click();
     });
-  }, data);
+  });
 }
 
 app.post("/get-quote", async (req, res) => {
@@ -508,10 +407,7 @@ app.post("/get-quote", async (req, res) => {
     );
 
     console.log("Step 1: Loading page...");
-    await page.goto(QUOTE_URL, {
-      waitUntil: "networkidle2",
-      timeout: 45000
-    });
+    await page.goto(QUOTE_URL, { waitUntil: "networkidle2", timeout: 45000 });
 
     await waitForText(page, "Getting Started", 30000);
 
@@ -525,7 +421,6 @@ app.post("/get-quote", async (req, res) => {
     await stopIfValidationError(page, "Step 1");
 
     const driverReached = await waitForText(page, "Driver", 30000);
-
     if (!driverReached) {
       const txt = await pageText(page);
       console.log("Did not reach Driver page:");
@@ -559,20 +454,12 @@ app.post("/get-quote", async (req, res) => {
         });
       }
 
-      document.querySelectorAll("select").forEach((sel) => {
+      Array.from(document.querySelectorAll("select")).forEach((sel) => {
         const k = String((sel.id || "") + " " + (sel.name || "")).toLowerCase();
 
-        if (k.includes("gender") && sel.options.length > 1) {
-          sel.value = d.gender || sel.options[1].value;
-        }
-
-        if (k.includes("marital") && sel.options.length > 1) {
-          sel.value = d.maritalStatus || sel.options[1].value;
-        }
-
-        if (k.includes("license") && sel.options.length > 1) {
-          sel.value = d.state || sel.options[1].value;
-        }
+        if (k.includes("gender") && sel.options.length > 1) sel.value = d.gender || sel.options[1].value;
+        if (k.includes("marital") && sel.options.length > 1) sel.value = d.maritalStatus || sel.options[1].value;
+        if (k.includes("license") && sel.options.length > 1) sel.value = d.state || sel.options[1].value;
 
         sel.dispatchEvent(new Event("change", { bubbles: true }));
       });
@@ -585,7 +472,6 @@ app.post("/get-quote", async (req, res) => {
     await stopIfValidationError(page, "Step 2 Driver");
 
     const driverSummary = await waitForText(page, "Driver Summary", 15000);
-
     if (driverSummary) {
       await clickSubmit(page);
       await page.waitForTimeout(2000);
@@ -593,7 +479,6 @@ app.post("/get-quote", async (req, res) => {
     }
 
     const vehicleReached = await waitForText(page, "Vehicle", 30000);
-
     if (!vehicleReached) {
       const txt = await pageText(page);
       console.log("Did not reach Vehicle page:");
@@ -613,7 +498,6 @@ app.post("/get-quote", async (req, res) => {
     await stopIfValidationError(page, "Step 3 Vehicle");
 
     const vehicleSummary = await waitForText(page, "Vehicle Summary", 15000);
-
     if (vehicleSummary) {
       await clickSubmit(page);
       await page.waitForTimeout(2000);
@@ -621,7 +505,6 @@ app.post("/get-quote", async (req, res) => {
     }
 
     const incidentReached = await waitForText(page, "Incident", 30000);
-
     if (!incidentReached) {
       const txt = await pageText(page);
       console.log("Did not reach Incident page:");
@@ -632,9 +515,8 @@ app.post("/get-quote", async (req, res) => {
     console.log("Step 3 done");
 
     console.log("Step 4: Incidents...");
-
     await page.evaluate(() => {
-      document.querySelectorAll("input[type='radio']").forEach((r) => {
+      Array.from(document.querySelectorAll("input[type='radio']")).forEach((r) => {
         const v = String(r.value || "").toLowerCase();
         if (v === "no" || v.includes("none")) r.click();
       });
@@ -647,7 +529,6 @@ app.post("/get-quote", async (req, res) => {
     await stopIfValidationError(page, "Step 4 Incidents");
 
     const finalReached = await waitForText(page, "Almost Done", 30000);
-
     if (!finalReached) {
       const txt = await pageText(page);
       console.log("Did not reach Final page:");
@@ -689,7 +570,6 @@ app.post("/get-quote", async (req, res) => {
     console.log("Step 5 submitted, waiting for Quote Summary...");
 
     const reachedQuoteSummary = await waitForText(page, "Quote Summary", 60000);
-
     if (!reachedQuoteSummary) {
       const txt = await pageText(page, 5000);
 
@@ -719,16 +599,14 @@ app.post("/get-quote", async (req, res) => {
       quotes = await page.evaluate(() => {
         const results = [];
 
-        document.querySelectorAll("table tr").forEach((row) => {
+        Array.from(document.querySelectorAll("table tr")).forEach((row) => {
           const img = row.querySelector("img");
           const cells = row.querySelectorAll("td");
           const text = row.innerText || "";
           const prices = text.match(/\$[\d,]+\.?\d*/g);
 
           if (cells.length >= 2 && prices && prices.length > 0) {
-            const carrier = img
-              ? img.alt
-              : cells[0].innerText.trim().split("\n")[0];
+            const carrier = img ? img.alt : cells[0].innerText.trim().split("\n")[0];
 
             results.push({
               carrier: carrier.trim(),
@@ -762,16 +640,11 @@ app.post("/get-quote", async (req, res) => {
       });
     }
 
-    return res.json({
-      success: true,
-      quotes
-    });
+    return res.json({ success: true, quotes });
   } catch (err) {
     console.error("ERROR:", err.message);
 
-    if (browser) {
-      await browser.close().catch(() => {});
-    }
+    if (browser) await browser.close().catch(() => {});
 
     return res.status(500).json({
       success: false,
