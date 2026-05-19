@@ -132,6 +132,90 @@ async function fillAllPossibleTextFields(page, data) {
   await page.evaluate((d) => {
     const phone = String(d.phone || "").replace(/\D/g, "");
 
+    function fire(el) {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    function set(el, val) {
+      if (!el) return;
+      el.focus();
+      el.value = val || "";
+      fire(el);
+    }
+
+    function rowText(el) {
+      const row = el.closest("tr") || el.closest("div") || el.parentElement;
+      return String(row?.innerText || "").toLowerCase();
+    }
+
+    // Fill text/email fields by visible label row text
+    document.querySelectorAll("input").forEach((inp) => {
+      const text = rowText(inp);
+      const key = String(
+        (inp.id || "") + " " + (inp.name || "") + " " + text
+      ).toLowerCase();
+
+      if (inp.type === "text" || inp.type === "email") {
+        if (key.includes("first name")) set(inp, d.firstName);
+        else if (key.includes("last name")) set(inp, d.lastName);
+        else if (key.includes("email")) set(inp, d.email || "david@test.com");
+        else if (key.includes("address") && !key.includes("email")) set(inp, d.address);
+        else if (key.includes("city")) set(inp, d.city);
+        else if (key.includes("zip")) set(inp, d.zip);
+        else if (key.includes("phone")) {
+          set(inp, `${phone.slice(0,3)}-${phone.slice(3,6)}-${phone.slice(6,10)}`);
+        }
+      }
+    });
+
+    // Extra phone handling
+    const phoneInputs = Array.from(document.querySelectorAll("input")).filter((inp) => {
+      const key = String((inp.id || "") + " " + (inp.name || "") + " " + rowText(inp)).toLowerCase();
+      return key.includes("phone");
+    });
+
+    if (phoneInputs.length >= 3) {
+      set(phoneInputs[0], phone.slice(0, 3));
+      set(phoneInputs[1], phone.slice(3, 6));
+      set(phoneInputs[2], phone.slice(6, 10));
+    }
+
+    // Select dropdowns
+    document.querySelectorAll("select").forEach((sel) => {
+      const text = rowText(sel);
+      const key = String((sel.id || "") + " " + (sel.name || "") + " " + text).toLowerCase();
+
+      if (key.includes("state")) {
+        sel.value = d.state || "NY";
+        fire(sel);
+      }
+
+      if (key.includes("line of business")) {
+        for (const opt of sel.options) {
+          if (String(opt.text).toLowerCase().includes("auto")) {
+            sel.value = opt.value;
+            fire(sel);
+            break;
+          }
+        }
+      }
+    });
+
+    // Radio buttons by row text
+    document.querySelectorAll("input[type='radio']").forEach((r) => {
+      const text = rowText(r);
+      const value = String(r.value || "").toLowerCase();
+
+      if (text.includes("are you a business") && value.includes("no")) r.click();
+      if (text.includes("line of business") && value.includes("auto")) r.click();
+    });
+  }, data);
+}
+  await page.evaluate((d) => {
+    const phone = String(d.phone || "").replace(/\D/g, "");
+
     document.querySelectorAll("input[type='text'], input[type='email']").forEach((inp) => {
       const id = String(inp.id || "").toLowerCase();
       const name = String(inp.name || "").toLowerCase();
