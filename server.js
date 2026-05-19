@@ -28,7 +28,7 @@ async function clickSubmit(page) {
   await page.evaluate(() => {
     const selectors = [
       'input[value="Continue"]',
-      'input[value="Next"]', 
+      'input[value="Next"]',
       'input[value="Submit"]',
       'input[type="submit"]',
       'button[type="submit"]'
@@ -43,7 +43,7 @@ async function clickSubmit(page) {
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
   const insurer = data.currentInsurer || 'None';
-  console.log('Quote reqauest:', data.firstName, data.lastName);
+  console.log('Quote request:', data.firstName, data.lastName);
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -54,43 +54,37 @@ app.post('/get-quote', async (req, res) => {
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
 
-    // STEP 1
+    // STEP 1: Getting Started
     console.log('Step 1: Loading page...');
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await waitForText(page, 'Getting Started');
     console.log('Step 1: Page loaded, filling form...');
 
     await page.evaluate((d) => {
-      // Business = No
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
-      // Fill text fields
       document.querySelectorAll('input[type="text"],input[type="email"]').forEach(inp => {
         const id = (inp.id||'').toLowerCase();
         if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('lastname')) { inp.value=d.lastName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('email')) { inp.value=d.email; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))     { inp.value=d.email;     inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('address') && !id.includes('email')) { inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('city')) { inp.value=d.city; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('zip')) { inp.value=d.zip; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))      { inp.value=d.city;      inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))       { inp.value=d.zip;       inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-      // Phone
       const ph = d.phone.replace(/\D/g,'');
       const phoneInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
       if(phoneInputs.length>=3) {
         phoneInputs[0].value=ph.slice(0,3); phoneInputs[1].value=ph.slice(3,6); phoneInputs[2].value=ph.slice(6,10);
         phoneInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));
       }
-      // State
       document.querySelectorAll('select').forEach(sel => {
         if((sel.id||'').toLowerCase().includes('state')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-      // Auto
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
 
     await page.waitForTimeout(1000);
     await clickSubmit(page);
-    console.log('Step 1: Submitted, waiting for Driver page...');
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
@@ -101,22 +95,21 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('input[type="text"]').forEach(inp => {
         const id=(inp.id||'').toLowerCase();
         if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('lastname')) { inp.value=d.lastName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
       const dob=d.dob.split('/');
       const dobInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('dob')||(i.id||'').toLowerCase().includes('birth'));
       if(dobInputs.length>=3){ dobInputs[0].value=dob[0]||'01'; dobInputs[1].value=dob[1]||'01'; dobInputs[2].value=dob[2]||'1990'; dobInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
-        if(id.includes('gender')) { sel.value=d.gender; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('gender'))  { sel.value=d.gender;        sel.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('marital')) { sel.value=d.maritalStatus; sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('license')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('license')) { sel.value=d.state;         sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data);
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Driver Summary');
-    console.log('Step 2: Driver submitted, clicking Next on summary...');
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Vehicle');
@@ -125,9 +118,9 @@ app.post('/get-quote', async (req, res) => {
     // STEP 3: Vehicle
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
-    await page.evaluate((d) => {
+    await page.evaluate(() => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value&&r.value.toLowerCase().includes('year')) r.click(); });
-    }, data);
+    });
     await page.waitForTimeout(500);
     await page.evaluate((year) => {
       document.querySelectorAll('select').forEach(sel => {
@@ -150,21 +143,27 @@ app.post('/get-quote', async (req, res) => {
       });
     }, data.vehicleModel);
     await page.waitForTimeout(1000);
-    await page.evaluate(() => {
+    await page.evaluate((d) => {
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
-        if(id.includes('body')&&sel.options.length>1) { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('body')&&sel.options.length>1)    { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('inspect')&&sel.options.length>1) { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
       document.querySelectorAll('input[type="radio"]').forEach(r => {
-        if(r.value==='Owned') r.click();
-        if(r.value&&r.value.toLowerCase().includes('full')) r.click();
+        if(r.value===d.ownership) r.click();
+        if(d.coverage==='FullCoverage'  && r.value&&r.value.toLowerCase().includes('full')) r.click();
+        if(d.coverage==='LiabilityOnly' && r.value&&r.value.toLowerCase().includes('liab')) r.click();
       });
-    });
+      const today=new Date();
+      const mm=String(today.getMonth()+1).padStart(2,'0');
+      const dd=String(today.getDate()).padStart(2,'0');
+      const yyyy=String(today.getFullYear());
+      const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
+      if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+    }, data);
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Vehicle Summary');
-    console.log('Step 3: Vehicle submitted, clicking Next on summary...');
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Incident');
@@ -176,152 +175,112 @@ app.post('/get-quote', async (req, res) => {
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
-    // DEBUG: log all input fields on Step 5
-const inputDebug = await page.evaluate(() => {
-  return Array.from(document.querySelectorAll('input, select')).map(el => ({
-    tag: el.tagName,
-    id: el.id,
-    name: el.name,
-    type: el.type,
-    placeholder: el.placeholder
-  }));
-});
-console.log('Step 5 fields:', JSON.stringify(inputDebug));
-// STEP 5: Final
-console.log('Step 5: Final page...');
-await page.waitForTimeout(1500);
-const today = new Date();
-const mm = String(today.getMonth() + 1).padStart(2, '0');
-const dd = String(today.getDate()).padStart(2, '0');
-const yyyy = String(today.getFullYear());
 
-await page.evaluate((mm, dd, yyyy, insurer, data) => {
-  // Fill by label text
-  function fillByLabel(labelText, value) {
-    if (!value) return;
-    document.querySelectorAll('label').forEach(label => {
-      if (label.textContent.trim().replace('*','').trim().toLowerCase().includes(labelText.toLowerCase())) {
-        const forId = label.getAttribute('for');
-        const input = forId ? document.getElementById(forId)
-          : label.nextElementSibling || label.parentElement.querySelector('input');
-        if (input) {
-          input.value = value;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
+    // STEP 5: Final Page — EXACT field IDs from EZLynx
+    console.log('Step 5: Final page...');
+    await page.waitForTimeout(2000);
+
+    const today = new Date();
+    const mm   = String(today.getMonth() + 1).padStart(2, '0');
+    const dd   = String(today.getDate()).padStart(2, '0');
+    const yyyy = String(today.getFullYear());
+    const ph   = data.phone.replace(/\D/g, '');
+
+    await page.evaluate((d, mm, dd, yyyy, ph, insurer) => {
+      function fill(id, val) {
+        const el = document.getElementById(id);
+        if (!el || val === undefined || val === null || val === '') return;
+        el.value = val;
+        el.dispatchEvent(new Event('input',  { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur',   { bubbles: true }));
+      }
+      function click(id) {
+        const el = document.getElementById(id);
+        if (el) el.click();
+      }
+      function setSelect(id, matchFn) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        for (const o of el.options) {
+          if (matchFn(o.value, o.text)) { el.value = o.value; break; }
         }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
       }
-    });
-  }
 
-  fillByLabel('First Name', data.firstName);
-  fillByLabel('Last Name', data.lastName);
-  fillByLabel('Address', data.address);
-  fillByLabel('City', data.city);
-  fillByLabel('Zip', data.zip);
-  fillByLabel('Email', data.email);
-  fillByLabel('Phone', data.phone);
+      // Applicant Details
+      fill('Applicant_FirstName',    d.firstName);
+      fill('Applicant_LastName',     d.lastName);
+      fill('Applicant_AddressLine1', d.address);
+      fill('Applicant_City',         d.city);
+      fill('Applicant_Zip',          d.zip);
+      fill('Applicant_Email',        d.email);
 
-  // Fill all selects
-  document.querySelectorAll('select').forEach(sel => {
-    const id = (sel.id || '').toLowerCase();
-    if (id.includes('state')) {
-      for (const o of sel.options) {
-        if (o.value === data.state) { sel.value = o.value; break; }
+      // Phone (3 separate fields)
+      fill('Applicant_HomePhone',    ph.slice(0, 3));
+      fill('Applicant_HomePhone_1',  ph.slice(3, 6));
+      fill('Applicant_HomePhone_2',  ph.slice(6, 10));
+
+      // State
+      setSelect('Applicant_State', (v) => v === d.state);
+
+      // Primary residence = Own
+      setSelect('CurrentAddress_Ownership', (v, t) =>
+        v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
+
+      // Policy effective date
+      fill('AutoPolicyInfo_EffectiveDate',   mm);
+      fill('AutoPolicyInfo_EffectiveDate_1', dd);
+      fill('AutoPolicyInfo_EffectiveDate_2', yyyy);
+
+      // Policy term = 6 months
+      setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
+
+      // Prior carrier
+      if (insurer && insurer !== 'None') {
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
+          t.toLowerCase().includes(insurer.toLowerCase()));
       }
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    if (id.includes('resid')) {
-      for (const o of sel.options) {
-        if (o.value.includes('Own') || o.value.includes('Home')) { sel.value = o.value; break; }
-      }
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    if (id.includes('duration')) {
-      for (const o of sel.options) {
-        if (o.value === '6' || o.text.includes('6')) { sel.value = o.value; break; }
-      }
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    if (id.includes('insur') || id.includes('carrier')) {
-      for (const o of sel.options) {
-        if (o.text.toLowerCase().includes(insurer.toLowerCase())) { sel.value = o.value; break; }
-      }
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  });
 
-  // Radio acknowledgements
-  document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r => r.click());
+      // Prior policy expiration
+      fill('AutoPriorPolicyInfo_Expiration',   mm);
+      fill('AutoPriorPolicyInfo_Expiration_1', dd);
+      fill('AutoPriorPolicyInfo_Expiration_2', yyyy);
 
-}, mm, dd, yyyy, insurer, {
-  firstName: data.firstName,
-  lastName: data.lastName,
-  address: data.address,
-  city: data.city,
-  state: data.state,
-  zip: data.zip,
-  email: data.email,
-  phone: data.phone,
-});
+      // 3 Acknowledgements = Yes
+      click('PolicyInfo_CreditCheckAuth_Yes');
+      click('Applicant_TermsAcceptance_Yes');
+      click('Applicant_QuoteAccuracyAcceptance_Yes');
 
-// Date fields
-await page.evaluate((mm, dd, yyyy) => {
-  const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-  const startInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('start') || (i.id||'').toLowerCase().includes('effective'));
-  const expInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('expir') || (i.id||'').toLowerCase().includes('renew'));
-  [startInputs, expInputs].forEach(inputs => {
-    if (inputs.length >= 3) {
-      inputs[0].value = mm; inputs[1].value = dd; inputs[2].value = yyyy;
-      inputs.forEach(i => i.dispatchEvent(new Event('change', { bubbles: true })));
-    }
-  });
-}, mm, dd, yyyy);
-// Date fields
-    await page.evaluate((mm, dd, yyyy) => {
-      const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-      const startInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('start') || (i.id||'').toLowerCase().includes('effective'));
-      const expInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('expir') || (i.id||'').toLowerCase().includes('renew'));
-      [startInputs, expInputs].forEach(inputs => {
-        if (inputs.length >= 3) {
-          inputs[0].value = mm;
-          inputs[1].value = dd;
-          inputs[2].value = yyyy;
-          inputs.forEach(i => i.dispatchEvent(new Event('change', { bubbles: true })));
-        }
-      });
-      // Acknowledgements
-      document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r => r.click());
-    }, mm, dd, yyyy);
+    }, data, mm, dd, yyyy, ph, insurer);
+
     await page.waitForTimeout(1000);
     await clickSubmit(page);
     console.log('Step 5: Submitted, waiting for Quote Summary...');
-    await waitForText(page, 'Quote Summary', 30000);
+    await waitForText(page, 'Quote Summary', 60000);
     console.log('Reached Quote Summary page!');
 
-    // Wait for quotes to load and scrape
+    // Scrape quotes
     let quotes = [];
     let attempts = 0;
     while (attempts < 15) {
       await page.waitForTimeout(5000);
       attempts++;
-
-      // Get full page text for debugging
-      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 300));
       console.log('Page text sample:', pageText.replace(/\n/g,' '));
 
       quotes = await page.evaluate(() => {
         const results = [];
-        // Try multiple table structures
         document.querySelectorAll('table tr').forEach(row => {
-          const img = row.querySelector('img');
+          const img   = row.querySelector('img');
           const cells = row.querySelectorAll('td');
           if (cells.length >= 2) {
             const carrier = img ? img.alt : cells[0].innerText.trim();
-            const text = row.innerText;
-            const match = text.match(/\$[\d,]+\.?\d*/g);
+            const text    = row.innerText;
+            const match   = text.match(/\$[\d,]+\.?\d*/g);
             if (carrier && carrier.length > 2 && match && match.length > 0) {
-              const monthly = match[match.length-1];
-              const term = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : '';
+              const monthly = match[match.length - 1];
+              const term    = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
               results.push({ carrier: carrier.trim(), term, monthly });
             }
           }
@@ -332,16 +291,14 @@ await page.evaluate((mm, dd, yyyy) => {
       console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
       if (quotes.length > 0) break;
 
-      // Check if still calculating
       const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
-      if (!stillCalc && attempts > 3) {
-        console.log('Page no longer calculating but no quotes found');
-        break;
-      }
+      if (!stillCalc && attempts > 3) { console.log('No more calculating'); break; }
     }
 
     await browser.close();
-    if (quotes.length === 0) return res.status(200).json({ success: false, message: 'Quotes still calculating. Please try again in a moment.', quotes: [] });
+    if (quotes.length === 0) {
+      return res.status(200).json({ success: false, message: 'Quotes still calculating. Please try again in a moment.', quotes: [] });
+    }
     console.log('Success! ' + quotes.length + ' quotes found');
     res.json({ success: true, quotes });
 
