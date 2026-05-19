@@ -185,39 +185,37 @@ const dd = String(today.getDate()).padStart(2, '0');
 const yyyy = String(today.getFullYear());
 
 await page.evaluate((mm, dd, yyyy, insurer, data) => {
-  // Fill text/email/tel input fields
-  const fieldMap = {
-    'first': data.firstName,
-    'fname': data.firstName,
-    'last': data.lastName,
-    'lname': data.lastName,
-    'address': data.address,
-    'city': data.city,
-    'zip': data.zip,
-    'postal': data.zip,
-    'email': data.email,
-    'phone': data.phone,
-  };
-
-  document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type])').forEach(input => {
-    const id = (input.id || input.name || '').toLowerCase();
-    for (const [key, value] of Object.entries(fieldMap)) {
-      if (id.includes(key) && value) {
-        input.value = value;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        break;
+  // Fill by label text
+  function fillByLabel(labelText, value) {
+    if (!value) return;
+    document.querySelectorAll('label').forEach(label => {
+      if (label.textContent.trim().replace('*','').trim().toLowerCase().includes(labelText.toLowerCase())) {
+        const forId = label.getAttribute('for');
+        const input = forId ? document.getElementById(forId)
+          : label.nextElementSibling || label.parentElement.querySelector('input');
+        if (input) {
+          input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
       }
-    }
-  });
+    });
+  }
 
-  // Fill select dropdowns
+  fillByLabel('First Name', data.firstName);
+  fillByLabel('Last Name', data.lastName);
+  fillByLabel('Address', data.address);
+  fillByLabel('City', data.city);
+  fillByLabel('Zip', data.zip);
+  fillByLabel('Email', data.email);
+  fillByLabel('Phone', data.phone);
+
+  // Fill all selects
   document.querySelectorAll('select').forEach(sel => {
     const id = (sel.id || '').toLowerCase();
-
     if (id.includes('state')) {
       for (const o of sel.options) {
-        if (o.value === data.state || o.text === data.state) { sel.value = o.value; break; }
+        if (o.value === data.state) { sel.value = o.value; break; }
       }
       sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
@@ -241,6 +239,9 @@ await page.evaluate((mm, dd, yyyy, insurer, data) => {
     }
   });
 
+  // Radio acknowledgements
+  document.querySelectorAll('input[type="radio"][value="Yes"]').forEach(r => r.click());
+
 }, mm, dd, yyyy, insurer, {
   firstName: data.firstName,
   lastName: data.lastName,
@@ -251,6 +252,19 @@ await page.evaluate((mm, dd, yyyy, insurer, data) => {
   email: data.email,
   phone: data.phone,
 });
+
+// Date fields
+await page.evaluate((mm, dd, yyyy) => {
+  const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
+  const startInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('start') || (i.id||'').toLowerCase().includes('effective'));
+  const expInputs = allInputs.filter(i => (i.id||'').toLowerCase().includes('expir') || (i.id||'').toLowerCase().includes('renew'));
+  [startInputs, expInputs].forEach(inputs => {
+    if (inputs.length >= 3) {
+      inputs[0].value = mm; inputs[1].value = dd; inputs[2].value = yyyy;
+      inputs.forEach(i => i.dispatchEvent(new Event('change', { bubbles: true })));
+    }
+  });
+}, mm, dd, yyyy);
 // Date fields
     await page.evaluate((mm, dd, yyyy) => {
       const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
