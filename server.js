@@ -1,3 +1,4 @@
+console.log("### NEW FIXED SERVER LOADED ###");
 const express = require("express");
 const cors = require("cors");
 const puppeteer = require("puppeteer");
