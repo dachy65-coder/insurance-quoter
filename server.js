@@ -176,6 +176,17 @@ app.post('/get-quote', async (req, res) => {
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
+    // DEBUG: log all input fields on Step 5
+const inputDebug = await page.evaluate(() => {
+  return Array.from(document.querySelectorAll('input, select')).map(el => ({
+    tag: el.tagName,
+    id: el.id,
+    name: el.name,
+    type: el.type,
+    placeholder: el.placeholder
+  }));
+});
+console.log('Step 5 fields:', JSON.stringify(inputDebug));
 // STEP 5: Final
 console.log('Step 5: Final page...');
 await page.waitForTimeout(1500);
