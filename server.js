@@ -1,12 +1,12 @@
-console.log("### SERVER LOADED: corrected-clean-v2 ###");
+console.log("### SERVER LOADED: TEST 123 ###");
 
 const express = require("express");
 const cors = require("cors");
-const puppeteer = require("puppeteer");
+const puppeteer = requirae("puppeteer");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.jsaon());
 
 const QUOTE_URL =
   "https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx";
