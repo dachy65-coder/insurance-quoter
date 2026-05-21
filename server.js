@@ -263,10 +263,20 @@ app.post('/get-quote', async (req, res) => {
 
     // Body style, inspection, ownership, coverage, purchase date
     await page.evaluate((d) => {
-      document.querySelectorAll('select').forEach(sel => {
+   document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
-        if(id.includes('body')&&sel.options.length>1)    { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('inspect')&&sel.options.length>1) { sel.value=sel.options[1].value; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        // Pick first valid option for any select still at -1
+        if(sel.value==='-1' && sel.options.length>1) {
+          sel.value=sel.options[1].value;
+          sel.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        // Fix coverage
+        if(id.includes('comprehensive') && sel.value==='NoCoverage') {
+          sel.value='500'; sel.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        if(id.includes('collision') && sel.value==='NoCoverage') {
+          sel.value='500'; sel.dispatchEvent(new Event('change',{bubbles:true}));
+        }
       });
       document.querySelectorAll('input[type="radio"]').forEach(r => {
         if(r.value===d.ownership) r.click();
