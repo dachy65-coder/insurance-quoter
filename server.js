@@ -209,7 +209,7 @@ app.post('/get-quote', async (req, res) => {
     }, data);
     await page.waitForTimeout(500);
     await clickSubmit(page);
-    await waitForText(const vSummary = await waitForText(page, 'Vehicle Summary', 10000);
+    await waitForText(page, 'Vehicle Summary');
     if (!vSummary) {
       console.log('Vehicle Summary not reached - possible model mismatch');
     }page, 'Vehicle Summary');
