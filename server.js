@@ -45,27 +45,10 @@ async function typeField(page, id, value) {
   try {
     const el = await page.$('#' + id);
     if (!el || !value) return;
-    await el.click({ clickCount: 3 }); // select all existing text
+    await el.click({ clickCount: 3 });
     await el.type(String(value), { delay: 10 });
   } catch(e) {
     console.log('typeField failed for', id, ':', e.message);
-  }
-}
-
-// Set a select dropdown by ID
-async function setSelect(page, id, matchFn) {
-  try {
-    await page.evaluate((id, matchFnStr) => {
-      const fn = new Function('v', 't', matchFnStr);
-      const el = document.getElementById(id);
-      if (!el) return;
-      for (const o of el.options) {
-        if (fn(o.value, o.text)) { el.value = o.value; break; }
-      }
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    }, id, matchFn.toString().replace(/^.*?{/, '').replace(/}$/, ''));
-  } catch(e) {
-    console.log('setSelect failed for', id, ':', e.message);
   }
 }
 
@@ -214,7 +197,7 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
-    // STEP 5: Final Page — using real keyboard input via page.type()
+    // STEP 5: Final Page
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
 
@@ -224,7 +207,7 @@ app.post('/get-quote', async (req, res) => {
     const yyyy = String(today.getFullYear());
     const ph   = data.phone.replace(/\D/g, '');
 
-    // Use real typing for text fields
+    // Use real typing for all text fields
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
     await typeField(page, 'Applicant_AddressLine1', data.address);
@@ -234,8 +217,6 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'Applicant_HomePhone',    ph.slice(0, 3));
     await typeField(page, 'Applicant_HomePhone_1',  ph.slice(3, 6));
     await typeField(page, 'Applicant_HomePhone_2',  ph.slice(6, 10));
-
-    // Dates via typing
     await typeField(page, 'AutoPolicyInfo_EffectiveDate',   mm);
     await typeField(page, 'AutoPolicyInfo_EffectiveDate_1', dd);
     await typeField(page, 'AutoPolicyInfo_EffectiveDate_2', yyyy);
@@ -243,7 +224,7 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_1', dd);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_2', yyyy);
 
-    // Selects via evaluate
+    // Selects
     await page.evaluate((state, insurer) => {
       function setSelect(id, matchFn) {
         const el = document.getElementById(id);
@@ -251,13 +232,9 @@ app.post('/get-quote', async (req, res) => {
         for (const o of el.options) { if (matchFn(o.value, o.text)) { el.value = o.value; break; } }
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      // State
       setSelect('Applicant_State', (v) => v === state);
-      // Primary residence = Own
       setSelect('CurrentAddress_Ownership', (v, t) => v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
-      // Policy term = 6 months
       setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
-      // Prior carrier
       if (insurer && insurer !== 'None') {
         setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => t.toLowerCase().includes(insurer.toLowerCase()));
       }
@@ -268,14 +245,25 @@ app.post('/get-quote', async (req, res) => {
     await clickId(page, 'Applicant_TermsAcceptance_Yes');
     await clickId(page, 'Applicant_QuoteAccuracyAcceptance_Yes');
 
-    // Log what was filled for debugging
+    // Full debug log
     const filled = await page.evaluate(() => ({
       firstName: document.getElementById('Applicant_FirstName')?.value,
       lastName:  document.getElementById('Applicant_LastName')?.value,
+      address:   document.getElementById('Applicant_AddressLine1')?.value,
       city:      document.getElementById('Applicant_City')?.value,
       state:     document.getElementById('Applicant_State')?.value,
+      zip:       document.getElementById('Applicant_Zip')?.value,
+      email:     document.getElementById('Applicant_Email')?.value,
+      phone1:    document.getElementById('Applicant_HomePhone')?.value,
+      phone2:    document.getElementById('Applicant_HomePhone_1')?.value,
+      phone3:    document.getElementById('Applicant_HomePhone_2')?.value,
+      ownership: document.getElementById('CurrentAddress_Ownership')?.value,
+      term:      document.getElementById('AutoPolicyInfo_PolicyTerm')?.value,
+      effDate:   document.getElementById('AutoPolicyInfo_EffectiveDate')?.value,
+      carrier:   document.getElementById('AutoPriorPolicyInfo_PriorCarrier')?.value,
       credit:    document.getElementById('PolicyInfo_CreditCheckAuth_Yes')?.checked,
       terms:     document.getElementById('Applicant_TermsAcceptance_Yes')?.checked,
+      accuracy:  document.getElementById('Applicant_QuoteAccuracyAcceptance_Yes')?.checked,
     }));
     console.log('Step 5 filled:', JSON.stringify(filled));
 
