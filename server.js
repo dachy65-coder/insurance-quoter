@@ -104,7 +104,7 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(3000);
     await clickSubmit(page);
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
@@ -236,7 +236,7 @@ app.post('/get-quote', async (req, res) => {
       setSelect('CurrentAddress_Ownership', (v, t) => v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
       setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
       if (insurer && insurer !== 'None') {
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => t.toLowerCase().includes(insurer.toLowerCase()));
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '-1' && t.toLowerCase().includes(insurer.toLowerCase()));
       }
     }, data.state, insurer);
 
