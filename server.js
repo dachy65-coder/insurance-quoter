@@ -288,6 +288,11 @@ app.post('/get-quote', async (req, res) => {
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Incident');
+    const vDebug = await page.evaluate(() => {
+      const sels = Array.from(document.querySelectorAll('select'));
+      return sels.map(s => ({ id: s.id, value: s.value, options: s.options.length }));
+    });
+    console.log('Vehicle selects:', JSON.stringify(vDebug));
     console.log('Step 3 done');
 
     // STEP 4: Incidents
