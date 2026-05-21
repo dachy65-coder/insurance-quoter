@@ -1,4 +1,5 @@
-const express = require('express');// v2
+// v3
+const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 
@@ -8,7 +9,7 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v3' }));
 
 async function waitForText(page, text, timeout = 20000) {
   try {
@@ -62,7 +63,6 @@ async function clickId(page, id) {
   } catch(e) {}
 }
 
-// Wait for a select to have more than 1 option loaded
 async function waitForSelectOptions(page, keyword, timeout = 8000) {
   try {
     await page.waitForFunction((kw) => {
@@ -101,10 +101,47 @@ async function scrapeQuotes(page) {
   });
 }
 
+async function fixVehicleSelects(page, data) {
+  await page.evaluate((d) => {
+    document.querySelectorAll('select').forEach(sel => {
+      const id = (sel.id || '').toLowerCase();
+      if (sel.value === '-1' && sel.options.length > 1) {
+        sel.value = sel.options[1].value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      if ((id.includes('comprehensive') || id.includes('collision')) &&
+          (sel.value === 'NoCoverage' || sel.value === '-1')) {
+        for (const o of sel.options) {
+          if (o.value === 'Item500' || o.value === '500') { sel.value = o.value; break; }
+        }
+        if (sel.value === 'NoCoverage' || sel.value === '-1') sel.value = sel.options[1].value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    document.querySelectorAll('input[type="radio"]').forEach(r => {
+      if(r.value === d.ownership) r.click();
+      if(d.coverage === 'FullCoverage'  && r.value && r.value.toLowerCase().includes('full')) r.click();
+      if(d.coverage === 'LiabilityOnly' && r.value && r.value.toLowerCase().includes('liab')) r.click();
+    });
+    const today = new Date(); today.setDate(today.getDate() + 7);
+    const mm  = String(today.getMonth() + 1).padStart(2, '0');
+    const dd  = String(today.getDate()).padStart(2, '0');
+    const yyyy = String(today.getFullYear());
+    const purchaseInputs = Array.from(document.querySelectorAll('input[type="text"]'))
+      .filter(i => (i.id || '').toLowerCase().includes('purchase'));
+    if (purchaseInputs.length >= 3) {
+      purchaseInputs[0].value = mm; purchaseInputs[1].value = dd; purchaseInputs[2].value = yyyy;
+      purchaseInputs.forEach(i => i.dispatchEvent(new Event('change', { bubbles: true })));
+    }
+  }, data);
+}
+
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
   const insurer = data.currentInsurer || 'None';
-  console.log('Quote request:', data.firstName, data.lastName);
+  const useVin = data.vehicleEntryMethod === 'vin' && data.vin && data.vin.length === 17;
+  console.log('Quote request:', data.firstName, data.lastName,
+    useVin ? 'VIN:' + data.vin : data.vehicleYear + ' ' + data.vehicleMake + ' ' + data.vehicleModel);
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -115,7 +152,7 @@ app.post('/get-quote', async (req, res) => {
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
 
-    // STEP 1: Getting Started
+    // STEP 1
     console.log('Step 1: Loading page...');
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await waitForText(page, 'Getting Started');
@@ -149,7 +186,7 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
-    // STEP 2: Driver
+    // STEP 2
     console.log('Step 2: Filling driver...');
     await page.waitForTimeout(1000);
     await page.evaluate((d) => {
@@ -163,9 +200,9 @@ app.post('/get-quote', async (req, res) => {
       if(dobInputs.length>=3){ dobInputs[0].value=dob[0]||'01'; dobInputs[1].value=dob[1]||'01'; dobInputs[2].value=dob[2]||'1990'; dobInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
-        if(id.includes('gender'))  { sel.value=d.gender;        sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('marital')) { sel.value='Single';        sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('license')) { sel.value=d.state;         sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('gender'))  { sel.value=d.gender;  sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('marital')) { sel.value='Single';  sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('license')) { sel.value=d.state;   sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data);
     await page.waitForTimeout(500);
@@ -176,123 +213,122 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
-    // STEP 3: Vehicle - wait for each dropdown to populate before selecting
+    // STEP 3
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
 
-    // Select by year/make/model radio
-    await page.evaluate(() => {
-      document.querySelectorAll('input[type="radio"]').forEach(r => {
-        if(r.value && r.value.toLowerCase().includes('year')) r.click();
+    if (useVin) {
+      // VIN entry
+      console.log('Step 3: Using VIN:', data.vin);
+
+      // Click "By VIN" radio
+      await page.evaluate(() => {
+        document.querySelectorAll('input[type="radio"]').forEach(r => {
+          const val = (r.value || '').toUpperCase();
+          const label = ((r.closest('label') || r.parentElement || {}).innerText || '').toUpperCase();
+          if(val === 'VIN' || val.includes('VIN') || label.includes('BY VIN') || label.includes('VIN')) r.click();
+        });
       });
-    });
+      await page.waitForTimeout(1000);
+
+      // Find VIN text input and type into it
+      const vinTyped = await page.evaluate((vin) => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+        // VIN field is usually the first visible text input after selecting By VIN
+        for (const inp of inputs) {
+          const id = (inp.id || inp.name || '').toUpperCase();
+          if (id.includes('VIN')) {
+            inp.value = vin;
+            inp.dispatchEvent(new Event('input',  { bubbles: true }));
+            inp.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+        // Fallback: first visible short text input
+        if (inputs[0]) {
+          inputs[0].value = vin;
+          inputs[0].dispatchEvent(new Event('input',  { bubbles: true }));
+          inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        return false;
+      }, data.vin);
+      console.log('VIN typed:', vinTyped);
+      await page.waitForTimeout(500);
+
+      // Click "Lookup VIN" button
+      const lookupClicked = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('input[type="button"], input[type="submit"], button'));
+        const btn = btns.find(b => (b.value || b.innerText || b.textContent || '').toLowerCase().includes('lookup'));
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+      console.log('Lookup VIN clicked:', lookupClicked);
+
+      // Wait for year dropdown to populate from VIN lookup
+      await waitForSelectOptions(page, 'year', 10000);
+      await page.waitForTimeout(2000);
+
+    } else {
+      // Year/Make/Model entry
+      await page.evaluate(() => {
+        document.querySelectorAll('input[type="radio"]').forEach(r => {
+          if(r.value && r.value.toLowerCase().includes('year')) r.click();
+        });
+      });
+      await page.waitForTimeout(500);
+
+      console.log('Step 3: Setting year', data.vehicleYear);
+      await page.evaluate((year) => {
+        document.querySelectorAll('select').forEach(sel => {
+          if((sel.id||'').toLowerCase().includes('year')) { sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        });
+      }, String(data.vehicleYear));
+
+      await waitForSelectOptions(page, 'make', 8000);
+      await page.waitForTimeout(500);
+
+      console.log('Step 3: Setting make', data.vehicleMake);
+      await page.evaluate((make) => {
+        document.querySelectorAll('select').forEach(sel => {
+          if((sel.id||'').toLowerCase().includes('make')) {
+            for(const opt of sel.options) {
+              if(opt.value.toUpperCase()===make || opt.text.toUpperCase()===make) { sel.value=opt.value; break; }
+            }
+            sel.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+        });
+      }, data.vehicleMake.toUpperCase());
+
+      await waitForSelectOptions(page, 'model', 8000);
+      await page.waitForTimeout(500);
+
+      console.log('Step 3: Setting model', data.vehicleModel);
+      await page.evaluate((model) => {
+        document.querySelectorAll('select').forEach(sel => {
+          if((sel.id||'').toLowerCase().includes('model') && !(sel.id||'').toLowerCase().includes('submodel')) {
+            let matched = false;
+            for(const opt of sel.options) {
+              const optClean = opt.text.toLowerCase().replace(/\b[a-z]\d{3,4}\b/gi,'').replace(/\s+/g,' ').trim();
+              const modelClean = model.toLowerCase().trim();
+              if(optClean.includes(modelClean) || modelClean.includes(optClean)) { sel.value=opt.value; matched=true; break; }
+            }
+            if(!matched && sel.options.length>1) sel.value=sel.options[1].value;
+            sel.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+        });
+      }, data.vehicleModel || '');
+    }
+
+    // Fix all remaining -1 selects
+    await page.waitForTimeout(2000);
+    await fixVehicleSelects(page, data);
     await page.waitForTimeout(500);
 
-    // Set year and wait for make dropdown to populate
-    console.log('Step 3: Setting year', data.vehicleYear);
-    await page.evaluate((year) => {
-      document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('year')) {
-          sel.value = year;
-          sel.dispatchEvent(new Event('change', {bubbles:true}));
-        }
-      });
-    }, String(data.vehicleYear));
-
-    // Wait for make dropdown to have options
-    await waitForSelectOptions(page, 'make', 8000);
-    await page.waitForTimeout(1000);
-
-    // Set make and wait for model dropdown to populate
-    console.log('Step 3: Setting make', data.vehicleMake);
-    await page.evaluate((make) => {
-      document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('make')) {
-          // Try exact match first, then partial
-          let matched = false;
-          for(const opt of sel.options) {
-            if(opt.value.toUpperCase() === make.toUpperCase() || opt.text.toUpperCase() === make.toUpperCase()) {
-              sel.value = opt.value;
-              matched = true;
-              break;
-            }
-          }
-          if(!matched) {
-            for(const opt of sel.options) {
-              if(opt.text.toUpperCase().includes(make.toUpperCase()) || make.toUpperCase().includes(opt.text.toUpperCase())) {
-                sel.value = opt.value;
-                matched = true;
-                break;
-              }
-            }
-          }
-          console.log('Make matched:', matched, sel.value);
-          sel.dispatchEvent(new Event('change', {bubbles:true}));
-        }
-      });
-    }, data.vehicleMake.toUpperCase());
-
-    // Wait for model dropdown to have options
-    await waitForSelectOptions(page, 'model', 8000);
-    await page.waitForTimeout(1000);
-
-    // Set model
-    console.log('Step 3: Setting model', data.vehicleModel);
-    await page.evaluate((model) => {
-      document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('model')) {
-          let matched = false;
-          for(const opt of sel.options) {
-            // Strip submodel codes like "C1500", "K1500" etc for matching
-            const optClean = opt.text.toLowerCase().replace(/\s+[a-z]\d{3,4}\b/gi,'').trim();
-            if(optClean.includes(model.toLowerCase()) || model.toLowerCase().includes(optClean)) {
-              sel.value = opt.value;
-              matched = true;
-              break;
-            }
-          }
-          // If no match, pick first available option
-          if(!matched && sel.options.length > 1) {
-            sel.value = sel.options[1].value;
-            console.log('Model not matched, using first option:', sel.options[1].text);
-          }
-          sel.dispatchEvent(new Event('change', {bubbles:true}));
-        }
-      });
-    }, data.vehicleModel);
-
-    await page.waitForTimeout(1000);
-
-    // Body style, inspection, ownership, coverage, purchase date
-    await page.evaluate((d) => {
-   document.querySelectorAll('select').forEach(sel => {
-        const id=(sel.id||'').toLowerCase();
-        // Pick first valid option for any select still at -1
-        if(sel.value==='-1' && sel.options.length>1) {
-          sel.value=sel.options[1].value;
-          sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-        // Fix coverage
-        if(id.includes('comprehensive') && sel.value==='NoCoverage') {
-          sel.value='500'; sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-        if(id.includes('collision') && sel.value==='NoCoverage') {
-          sel.value='500'; sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-      });
-      document.querySelectorAll('input[type="radio"]').forEach(r => {
-        if(r.value===d.ownership) r.click();
-        if(d.coverage==='FullCoverage'  && r.value&&r.value.toLowerCase().includes('full')) r.click();
-        if(d.coverage==='LiabilityOnly' && r.value&&r.value.toLowerCase().includes('liab')) r.click();
-      });
-      const today=new Date();
-      today.setDate(today.getDate() + 7);
-      const mm=String(today.getMonth()+1).padStart(2,'0');
-      const dd=String(today.getDate()).padStart(2,'0');
-      const yyyy=String(today.getFullYear());
-      const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
-      if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
-    }, data);
+    const vDebug = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('select')).map(s => ({ id: s.id, value: s.value, options: s.options.length }))
+    );
+    console.log('Vehicle selects after fix:', JSON.stringify(vDebug));
 
     await page.waitForTimeout(500);
     await clickSubmit(page);
@@ -300,21 +336,16 @@ app.post('/get-quote', async (req, res) => {
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Incident');
-    const vDebug = await page.evaluate(() => {
-      const sels = Array.from(document.querySelectorAll('select'));
-      return sels.map(s => ({ id: s.id, value: s.value, options: s.options.length }));
-    });
-    console.log('Vehicle selects:', JSON.stringify(vDebug));
     console.log('Step 3 done');
 
-    // STEP 4: Incidents
+    // STEP 4
     console.log('Step 4: Incidents...');
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
-    // STEP 5: Final Page
+    // STEP 5
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
 
@@ -325,7 +356,6 @@ app.post('/get-quote', async (req, res) => {
     const yyyy = String(today.getFullYear());
     const ph   = data.phone.replace(/\D/g, '');
 
-    // Set selects first
     console.log('Step 5: Setting selects...');
     await page.evaluate((state, insurer) => {
       function setSelect(id, matchFn) {
@@ -350,7 +380,6 @@ app.post('/get-quote', async (req, res) => {
 
     await page.waitForTimeout(2000);
 
-    // Type text fields after selects settled
     console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
@@ -368,27 +397,15 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_1', dd);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_2', yyyy);
 
-    // Acknowledgements
     await clickId(page, 'PolicyInfo_CreditCheckAuth_Yes');
     await clickId(page, 'Applicant_TermsAcceptance_Yes');
     await clickId(page, 'Applicant_QuoteAccuracyAcceptance_Yes');
 
-    // Debug log
     const filled = await page.evaluate(() => ({
       firstName: document.getElementById('Applicant_FirstName')?.value,
       lastName:  document.getElementById('Applicant_LastName')?.value,
-      address:   document.getElementById('Applicant_AddressLine1')?.value,
       city:      document.getElementById('Applicant_City')?.value,
       state:     document.getElementById('Applicant_State')?.value,
-      zip:       document.getElementById('Applicant_Zip')?.value,
-      email:     document.getElementById('Applicant_Email')?.value,
-      phone1:    document.getElementById('Applicant_HomePhone')?.value,
-      phone2:    document.getElementById('Applicant_HomePhone_1')?.value,
-      phone3:    document.getElementById('Applicant_HomePhone_2')?.value,
-      ownership: document.getElementById('CurrentAddress_Ownership')?.value,
-      term:      document.getElementById('AutoPolicyInfo_PolicyTerm')?.value,
-      effDate:   document.getElementById('AutoPolicyInfo_EffectiveDate')?.value,
-      carrier:   document.getElementById('AutoPriorPolicyInfo_PriorCarrier')?.value,
       credit:    document.getElementById('PolicyInfo_CreditCheckAuth_Yes')?.checked,
       terms:     document.getElementById('Applicant_TermsAcceptance_Yes')?.checked,
       accuracy:  document.getElementById('Applicant_QuoteAccuracyAcceptance_Yes')?.checked,
@@ -401,7 +418,6 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Quote Summary', 60000);
     console.log('Reached Quote Summary page!');
 
-    // Scrape quotes with auto-refresh protection
     let quotes = [];
     let attempts = 0;
     while (attempts < 15) {
