@@ -243,7 +243,9 @@ app.post('/get-quote', async (req, res) => {
         if((sel.id||'').toLowerCase().includes('model')) {
           let matched = false;
           for(const opt of sel.options) {
-            if(opt.text.toLowerCase().includes(model.toLowerCase()) || model.toLowerCase().includes(opt.text.toLowerCase().replace(/\s+/g,''))) {
+            // Strip submodel codes like "C1500", "K1500" etc for matching
+            const optClean = opt.text.toLowerCase().replace(/\s+[a-z]\d{3,4}\b/gi,'').trim();
+            if(optClean.includes(model.toLowerCase()) || model.toLowerCase().includes(optClean)) {
               sel.value = opt.value;
               matched = true;
               break;
