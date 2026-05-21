@@ -232,9 +232,14 @@ app.post('/get-quote', async (req, res) => {
       setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
 
       // Prior carrier
+     const norm = s => s.toLowerCase().replace(/[\s\-\_\.]/g, '');
       if (insurer && insurer !== 'None') {
         setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
-          v !== '-1' && t.toLowerCase().includes(insurer.toLowerCase()));
+          v !== '-1' && norm(t).includes(norm(insurer)));
+      } else {
+        // No prior insurance - pick first valid option
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
+          v !== '' && v !== '-1' && (t.toLowerCase().includes('no prior') || t.toLowerCase().includes('none')));
       }
     }, data.state, insurer);
 
