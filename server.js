@@ -1,4 +1,4 @@
-// v3
+// v4
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
@@ -9,7 +9,7 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v3' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v4' }));
 
 async function waitForText(page, text, timeout = 20000) {
   try {
@@ -105,6 +105,7 @@ async function fixVehicleSelects(page, data) {
   await page.evaluate((d) => {
     document.querySelectorAll('select').forEach(sel => {
       const id = (sel.id || '').toLowerCase();
+      if (!id.startsWith('vehicle')) return; // Only fix vehicle selects
       if (sel.value === '-1' && sel.options.length > 1) {
         sel.value = sel.options[1].value;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
@@ -186,25 +187,46 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
-    // STEP 2
+    // STEP 2: Driver
     console.log('Step 2: Filling driver...');
     await page.waitForTimeout(1000);
-    await page.evaluate((d) => {
+
+    const dob = (data.dob || '01/01/1990').split('/');
+
+    await page.evaluate((d, dob) => {
+      // Fill name fields
       document.querySelectorAll('input[type="text"]').forEach(inp => {
         const id=(inp.id||'').toLowerCase();
         if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-      const dob=d.dob.split('/');
-      const dobInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('dob')||(i.id||'').toLowerCase().includes('birth'));
-      if(dobInputs.length>=3){ dobInputs[0].value=dob[0]||'01'; dobInputs[1].value=dob[1]||'01'; dobInputs[2].value=dob[2]||'1990'; dobInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+
+      // Fill DOB - try split inputs first
+      const dobInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i => {
+        const id = (i.id||'').toLowerCase();
+        return id.includes('dob') || id.includes('birth');
+      });
+      if(dobInputs.length >= 3) {
+        dobInputs[0].value = dob[0]||'01';
+        dobInputs[1].value = dob[1]||'01';
+        dobInputs[2].value = dob[2]||'1990';
+        dobInputs.forEach(i => i.dispatchEvent(new Event('change',{bubbles:true})));
+      }
+
+      // Fill selects
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
-        if(id.includes('gender'))  { sel.value=d.gender;  sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('marital')) { sel.value='Single';  sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('license')) { sel.value=d.state;   sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('gender'))  { sel.value=d.gender||'Male'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('marital')) { sel.value='Single';          sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('license') || id.includes('dlstate')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-    }, data);
+    }, data, dob);
+
+    // Also try typeField for DOB as backup
+    await typeField(page, 'Driver1_DOB',   dob[0]||'01');
+    await typeField(page, 'Driver1_DOB_1', dob[1]||'01');
+    await typeField(page, 'Driver1_DOB_2', dob[2]||'1990');
+
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Driver Summary');
@@ -213,12 +235,11 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
-    // STEP 3
+    // STEP 3: Vehicle
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
 
     if (useVin) {
-      // VIN entry
       console.log('Step 3: Using VIN:', data.vin);
 
       // Click "By VIN" radio
@@ -226,51 +247,55 @@ app.post('/get-quote', async (req, res) => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
           const val = (r.value || '').toUpperCase();
           const label = ((r.closest('label') || r.parentElement || {}).innerText || '').toUpperCase();
-          if(val === 'VIN' || val.includes('VIN') || label.includes('BY VIN') || label.includes('VIN')) r.click();
+          if(val === 'VIN' || label.includes('BY VIN') || label.includes('VIN')) r.click();
         });
       });
       await page.waitForTimeout(1000);
 
-      // Find VIN text input and type into it
-      const vinTyped = await page.evaluate((vin) => {
-        const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
-        // VIN field is usually the first visible text input after selecting By VIN
-        for (const inp of inputs) {
+      // Type VIN - try multiple approaches
+      await page.evaluate((vin) => {
+        // Try by ID containing VIN
+        let filled = false;
+        document.querySelectorAll('input[type="text"]').forEach(inp => {
           const id = (inp.id || inp.name || '').toUpperCase();
-          if (id.includes('VIN')) {
+          if (id.includes('VIN') && !filled) {
             inp.value = vin;
             inp.dispatchEvent(new Event('input',  { bubbles: true }));
             inp.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+            filled = true;
+          }
+        });
+        // Fallback: first visible text input on page
+        if (!filled) {
+          const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+          if (inputs.length > 0) {
+            inputs[0].value = vin;
+            inputs[0].dispatchEvent(new Event('input',  { bubbles: true }));
+            inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
           }
         }
-        // Fallback: first visible short text input
-        if (inputs[0]) {
-          inputs[0].value = vin;
-          inputs[0].dispatchEvent(new Event('input',  { bubbles: true }));
-          inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-        return false;
       }, data.vin);
-      console.log('VIN typed:', vinTyped);
+
       await page.waitForTimeout(500);
 
-      // Click "Lookup VIN" button
+      // Click Lookup VIN button - try multiple selectors
       const lookupClicked = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('input[type="button"], input[type="submit"], button'));
-        const btn = btns.find(b => (b.value || b.innerText || b.textContent || '').toLowerCase().includes('lookup'));
+        const allEls = Array.from(document.querySelectorAll('input, button, a'));
+        const btn = allEls.find(b => {
+          const txt = (b.value || b.innerText || b.textContent || b.id || '').toLowerCase();
+          return txt.includes('lookup') || txt.includes('look up') || txt.includes('decode');
+        });
         if (btn) { btn.click(); return true; }
         return false;
       });
       console.log('Lookup VIN clicked:', lookupClicked);
 
-      // Wait for year dropdown to populate from VIN lookup
+      // Wait for VIN to decode and year to populate
       await waitForSelectOptions(page, 'year', 10000);
       await page.waitForTimeout(2000);
 
     } else {
-      // Year/Make/Model entry
+      // Year/Make/Model
       await page.evaluate(() => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
           if(r.value && r.value.toLowerCase().includes('year')) r.click();
@@ -281,7 +306,9 @@ app.post('/get-quote', async (req, res) => {
       console.log('Step 3: Setting year', data.vehicleYear);
       await page.evaluate((year) => {
         document.querySelectorAll('select').forEach(sel => {
-          if((sel.id||'').toLowerCase().includes('year')) { sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+          if((sel.id||'').toLowerCase().includes('year') && (sel.id||'').toLowerCase().includes('vehicle')) {
+            sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true}));
+          }
         });
       }, String(data.vehicleYear));
 
@@ -338,12 +365,13 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Incident');
     console.log('Step 3 done');
 
-  // STEP 4: Incidents - always select No
+    // STEP 4: Incidents - always click No to skip
     console.log('Step 4: Incidents...');
     await page.waitForTimeout(500);
     await page.evaluate(() => {
       document.querySelectorAll('input[type="radio"]').forEach(r => {
-        if((r.value||'').toLowerCase() === 'no' || (r.value||'').toLowerCase().includes('none')) r.click();
+        const v = (r.value||'').toLowerCase();
+        if(v === 'no' || v === 'none' || v === 'false') r.click();
       });
     });
     await page.waitForTimeout(500);
@@ -351,7 +379,7 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
-    // STEP 5
+    // STEP 5: Final Page
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
 
@@ -445,7 +473,11 @@ app.post('/get-quote', async (req, res) => {
 
     await browser.close();
     if (quotes.length === 0) {
-     return res.status(200).json({ success: false, message: 'Online quotes are not available for this vehicle. Please call Whitestone Insurance at (929) 292-8005 for a personalized quote.', quotes: [] });
+      return res.status(200).json({
+        success: false,
+        message: 'Online quotes are not available for this vehicle. Please call Whitestone Insurance at (929) 292-8005 for a personalized quote.',
+        quotes: []
+      });
     }
     console.log('Success! ' + quotes.length + ' quotes found');
     res.json({ success: true, quotes });
