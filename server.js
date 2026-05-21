@@ -40,13 +40,14 @@ async function clickSubmit(page) {
   });
 }
 
-// Type into a field by ID using real keyboard simulation
 async function typeField(page, id, value) {
   try {
     const el = await page.$('#' + id);
     if (!el || !value) return;
     await el.click({ clickCount: 3 });
-    await el.type(String(value), { delay: 10 });
+    await page.keyboard.press('Backspace');
+    await el.type(String(value), { delay: 20 });
+    await page.keyboard.press('Tab');
   } catch(e) {
     console.log('typeField failed for', id, ':', e.message);
   }
@@ -104,7 +105,7 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1000);
     await clickSubmit(page);
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
@@ -198,6 +199,7 @@ app.post('/get-quote', async (req, res) => {
     console.log('Step 4 done');
 
     // STEP 5: Final Page
+    // IMPORTANT: Set selects FIRST (they may trigger postbacks), then type text fields
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
 
@@ -207,7 +209,40 @@ app.post('/get-quote', async (req, res) => {
     const yyyy = String(today.getFullYear());
     const ph   = data.phone.replace(/\D/g, '');
 
-    // Use real typing for all text fields
+    // STEP 5A: Set all selects first and wait for any postbacks to settle
+    console.log('Step 5: Setting selects...');
+    await page.evaluate((state, insurer) => {
+      function setSelect(id, matchFn) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        for (const o of el.options) {
+          if (matchFn(o.value, o.text)) { el.value = o.value; break; }
+        }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      // State - set without triggering postback if possible
+      const stateEl = document.getElementById('Applicant_State');
+      if (stateEl) { stateEl.value = state; stateEl.dispatchEvent(new Event('change', { bubbles: true })); }
+
+      // Ownership
+      setSelect('CurrentAddress_Ownership', (v, t) =>
+        v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
+
+      // Policy term 6 months
+      setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
+
+      // Prior carrier
+      if (insurer && insurer !== 'None') {
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
+          v !== '-1' && t.toLowerCase().includes(insurer.toLowerCase()));
+      }
+    }, data.state, insurer);
+
+    // Wait for any postbacks triggered by select changes
+    await page.waitForTimeout(2000);
+
+    // STEP 5B: Now type all text fields AFTER selects have settled
+    console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
     await typeField(page, 'Applicant_AddressLine1', data.address);
@@ -224,23 +259,7 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_1', dd);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_2', yyyy);
 
-    // Selects
-    await page.evaluate((state, insurer) => {
-      function setSelect(id, matchFn) {
-        const el = document.getElementById(id);
-        if (!el) return;
-        for (const o of el.options) { if (matchFn(o.value, o.text)) { el.value = o.value; break; } }
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      setSelect('Applicant_State', (v) => v === state);
-      setSelect('CurrentAddress_Ownership', (v, t) => v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
-      setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
-      if (insurer && insurer !== 'None') {
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '-1' && t.toLowerCase().includes(insurer.toLowerCase()));
-      }
-    }, data.state, insurer);
-
-    // Acknowledgements
+    // STEP 5C: Acknowledgements
     await clickId(page, 'PolicyInfo_CreditCheckAuth_Yes');
     await clickId(page, 'Applicant_TermsAcceptance_Yes');
     await clickId(page, 'Applicant_QuoteAccuracyAcceptance_Yes');
@@ -260,6 +279,7 @@ app.post('/get-quote', async (req, res) => {
       ownership: document.getElementById('CurrentAddress_Ownership')?.value,
       term:      document.getElementById('AutoPolicyInfo_PolicyTerm')?.value,
       effDate:   document.getElementById('AutoPolicyInfo_EffectiveDate')?.value,
+      expDate:   document.getElementById('AutoPriorPolicyInfo_Expiration')?.value,
       carrier:   document.getElementById('AutoPriorPolicyInfo_PriorCarrier')?.value,
       credit:    document.getElementById('PolicyInfo_CreditCheckAuth_Yes')?.checked,
       terms:     document.getElementById('Applicant_TermsAcceptance_Yes')?.checked,
