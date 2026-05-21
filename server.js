@@ -439,7 +439,7 @@ app.post('/get-quote', async (req, res) => {
 
     await browser.close();
     if (quotes.length === 0) {
-      return res.status(200).json({ success: false, message: 'Quotes still calculating. Please try again in a moment.', quotes: [] });
+     return res.status(200).json({ success: false, message: 'Online quotes are not available for this vehicle. Please call Whitestone Insurance at (929) 292-8005 for a personalized quote.', quotes: [] });
     }
     console.log('Success! ' + quotes.length + ' quotes found');
     res.json({ success: true, quotes });
