@@ -62,6 +62,21 @@ async function clickId(page, id) {
   } catch(e) {}
 }
 
+// Wait for a select to have more than 1 option loaded
+async function waitForSelectOptions(page, keyword, timeout = 8000) {
+  try {
+    await page.waitForFunction((kw) => {
+      const sels = Array.from(document.querySelectorAll('select'));
+      const sel = sels.find(s => (s.id || '').toLowerCase().includes(kw));
+      return sel && sel.options.length > 1;
+    }, { timeout }, keyword);
+    return true;
+  } catch(e) {
+    console.log('Timeout waiting for select options:', keyword);
+    return false;
+  }
+}
+
 async function scrapeQuotes(page) {
   return await page.evaluate(() => {
     const results = [];
@@ -149,7 +164,7 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
         if(id.includes('gender'))  { sel.value=d.gender;        sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('marital')) { sel.value='Single'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('marital')) { sel.value='Single';        sel.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('license')) { sel.value=d.state;         sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data);
@@ -161,34 +176,92 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
-    // STEP 3: Vehicle
+    // STEP 3: Vehicle - wait for each dropdown to populate before selecting
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
+
+    // Select by year/make/model radio
     await page.evaluate(() => {
-      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value&&r.value.toLowerCase().includes('year')) r.click(); });
+      document.querySelectorAll('input[type="radio"]').forEach(r => {
+        if(r.value && r.value.toLowerCase().includes('year')) r.click();
+      });
     });
     await page.waitForTimeout(500);
+
+    // Set year and wait for make dropdown to populate
+    console.log('Step 3: Setting year', data.vehicleYear);
     await page.evaluate((year) => {
       document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('year')) { sel.value=year; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if((sel.id||'').toLowerCase().includes('year')) {
+          sel.value = year;
+          sel.dispatchEvent(new Event('change', {bubbles:true}));
+        }
       });
     }, String(data.vehicleYear));
-    await page.waitForTimeout(1500);
+
+    // Wait for make dropdown to have options
+    await waitForSelectOptions(page, 'make', 8000);
+    await page.waitForTimeout(1000);
+
+    // Set make and wait for model dropdown to populate
+    console.log('Step 3: Setting make', data.vehicleMake);
     await page.evaluate((make) => {
       document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('make')) { sel.value=make; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if((sel.id||'').toLowerCase().includes('make')) {
+          // Try exact match first, then partial
+          let matched = false;
+          for(const opt of sel.options) {
+            if(opt.value.toUpperCase() === make.toUpperCase() || opt.text.toUpperCase() === make.toUpperCase()) {
+              sel.value = opt.value;
+              matched = true;
+              break;
+            }
+          }
+          if(!matched) {
+            for(const opt of sel.options) {
+              if(opt.text.toUpperCase().includes(make.toUpperCase()) || make.toUpperCase().includes(opt.text.toUpperCase())) {
+                sel.value = opt.value;
+                matched = true;
+                break;
+              }
+            }
+          }
+          console.log('Make matched:', matched, sel.value);
+          sel.dispatchEvent(new Event('change', {bubbles:true}));
+        }
       });
     }, data.vehicleMake.toUpperCase());
-    await page.waitForTimeout(1500);
+
+    // Wait for model dropdown to have options
+    await waitForSelectOptions(page, 'model', 8000);
+    await page.waitForTimeout(1000);
+
+    // Set model
+    console.log('Step 3: Setting model', data.vehicleModel);
     await page.evaluate((model) => {
       document.querySelectorAll('select').forEach(sel => {
         if((sel.id||'').toLowerCase().includes('model')) {
-          for(const opt of sel.options) { if(opt.text.toLowerCase().includes(model.toLowerCase())) { sel.value=opt.value; break; } }
-          sel.dispatchEvent(new Event('change',{bubbles:true}));
+          let matched = false;
+          for(const opt of sel.options) {
+            if(opt.text.toLowerCase().includes(model.toLowerCase()) || model.toLowerCase().includes(opt.text.toLowerCase().replace(/\s+/g,''))) {
+              sel.value = opt.value;
+              matched = true;
+              break;
+            }
+          }
+          // If no match, pick first available option
+          if(!matched && sel.options.length > 1) {
+            sel.value = sel.options[1].value;
+            console.log('Model not matched, using first option:', sel.options[1].text);
+          }
+          sel.dispatchEvent(new Event('change', {bubbles:true}));
         }
       });
     }, data.vehicleModel);
+
     await page.waitForTimeout(1000);
+
+    // Body style, inspection, ownership, coverage, purchase date
     await page.evaluate((d) => {
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
@@ -201,12 +274,14 @@ app.post('/get-quote', async (req, res) => {
         if(d.coverage==='LiabilityOnly' && r.value&&r.value.toLowerCase().includes('liab')) r.click();
       });
       const today=new Date();
+      today.setDate(today.getDate() + 7);
       const mm=String(today.getMonth()+1).padStart(2,'0');
       const dd=String(today.getDate()).padStart(2,'0');
       const yyyy=String(today.getFullYear());
       const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
       if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
     }, data);
+
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Vehicle Summary');
@@ -233,7 +308,7 @@ app.post('/get-quote', async (req, res) => {
     const yyyy = String(today.getFullYear());
     const ph   = data.phone.replace(/\D/g, '');
 
-    // Set selects first, wait for postbacks to settle
+    // Set selects first
     console.log('Step 5: Setting selects...');
     await page.evaluate((state, insurer) => {
       function setSelect(id, matchFn) {
@@ -316,19 +391,15 @@ app.post('/get-quote', async (req, res) => {
       try {
         await page.waitForTimeout(6000);
         attempts++;
-
         const pageText = await page.evaluate(() => document.body.innerText.substring(0, 300));
         console.log('Attempt ' + attempts + ' page sample:', pageText.replace(/\n/g,' '));
-
         quotes = await scrapeQuotes(page);
         console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
         if (quotes.length > 0) break;
-
         const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
         if (!stillCalc && attempts > 4) { console.log('No more calculating'); break; }
-
       } catch(e) {
-        console.log('Attempt ' + attempts + ' interrupted (page refresh):', e.message);
+        console.log('Attempt ' + attempts + ' interrupted:', e.message);
         await page.waitForTimeout(4000);
       }
     }
