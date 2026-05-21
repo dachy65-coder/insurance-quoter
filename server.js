@@ -149,7 +149,7 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('select').forEach(sel => {
         const id=(sel.id||'').toLowerCase();
         if(id.includes('gender'))  { sel.value=d.gender;        sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('marital')) { sel.value=d.maritalStatus; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('marital')) { sel.value='Single'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('license')) { sel.value=d.state;         sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data);
