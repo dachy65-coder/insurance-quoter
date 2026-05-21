@@ -316,7 +316,10 @@ app.post('/get-quote', async (req, res) => {
             const carrier = img ? img.alt : cells[0].innerText.trim();
             const text    = row.innerText;
             const match   = text.match(/\$[\d,]+\.?\d*/g);
-            if (carrier && carrier.length > 2 && match && match.length > 0) {
+            const skipWords = ['bodily', 'injury', 'property', 'damage', 'liability', 'medical', 'uninsured', 'underinsured', 'collision', 'comprehensive', 'coverage'];
+          const carrierLower = carrier.toLowerCase();
+          const isJunk = skipWords.some(w => carrierLower.includes(w));
+          if (carrier && carrier.length > 2 && match && match.length > 0 && !isJunk) {
               const monthly = match[match.length - 1];
               const term    = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
               results.push({ carrier: carrier.trim(), term, monthly });
