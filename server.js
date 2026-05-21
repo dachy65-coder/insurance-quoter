@@ -62,6 +62,30 @@ async function clickId(page, id) {
   } catch(e) {}
 }
 
+async function scrapeQuotes(page) {
+  return await page.evaluate(() => {
+    const results = [];
+    const skipWords = ['bodily','injury','property','damage','liability','medical','uninsured','underinsured','collision','comprehensive','coverage','deductible','protection'];
+    document.querySelectorAll('table tr').forEach(row => {
+      const img   = row.querySelector('img');
+      const cells = row.querySelectorAll('td');
+      if (cells.length >= 2) {
+        const carrier = img ? img.alt : cells[0].innerText.trim().split('\n')[0];
+        const text    = row.innerText;
+        const match   = text.match(/\$[\d,]+\.?\d*/g);
+        const carrierLower = carrier.toLowerCase();
+        const isJunk = skipWords.some(w => carrierLower.includes(w));
+        if (carrier && carrier.length > 2 && !isJunk && match && match.length > 0) {
+          const monthly = match[match.length - 1];
+          const term    = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
+          results.push({ carrier: carrier.trim(), term, monthly });
+        }
+      }
+    });
+    return results;
+  });
+}
+
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
   const insurer = data.currentInsurer || 'None';
@@ -199,7 +223,6 @@ app.post('/get-quote', async (req, res) => {
     console.log('Step 4 done');
 
     // STEP 5: Final Page
-    // IMPORTANT: Set selects FIRST (they may trigger postbacks), then type text fields
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
 
@@ -209,7 +232,7 @@ app.post('/get-quote', async (req, res) => {
     const yyyy = String(today.getFullYear());
     const ph   = data.phone.replace(/\D/g, '');
 
-    // STEP 5A: Set all selects first and wait for any postbacks to settle
+    // Set selects first, wait for postbacks to settle
     console.log('Step 5: Setting selects...');
     await page.evaluate((state, insurer) => {
       function setSelect(id, matchFn) {
@@ -220,33 +243,21 @@ app.post('/get-quote', async (req, res) => {
         }
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      // State - set without triggering postback if possible
       const stateEl = document.getElementById('Applicant_State');
       if (stateEl) { stateEl.value = state; stateEl.dispatchEvent(new Event('change', { bubbles: true })); }
-
-      // Ownership
-      setSelect('CurrentAddress_Ownership', (v, t) =>
-        v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
-
-      // Policy term 6 months
+      setSelect('CurrentAddress_Ownership', (v, t) => v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
       setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
-
-      // Prior carrier
-     const norm = s => s.toLowerCase().replace(/[\s\-\_\.]/g, '');
+      const norm = s => s.toLowerCase().replace(/[\s\-\_\.]/g, '');
       if (insurer && insurer !== 'None') {
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
-          v !== '-1' && norm(t).includes(norm(insurer)));
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '-1' && norm(t).includes(norm(insurer)));
       } else {
-        // No prior insurance - pick first valid option
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) =>
-          v !== '' && v !== '-1' && (t.toLowerCase().includes('no prior') || t.toLowerCase().includes('none')));
+        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '' && v !== '-1' && (t.toLowerCase().includes('no prior') || t.toLowerCase().includes('none')));
       }
     }, data.state, insurer);
 
-    // Wait for any postbacks triggered by select changes
     await page.waitForTimeout(2000);
 
-    // STEP 5B: Now type all text fields AFTER selects have settled
+    // Type text fields after selects settled
     console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
@@ -264,12 +275,12 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_1', dd);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_2', yyyy);
 
-    // STEP 5C: Acknowledgements
+    // Acknowledgements
     await clickId(page, 'PolicyInfo_CreditCheckAuth_Yes');
     await clickId(page, 'Applicant_TermsAcceptance_Yes');
     await clickId(page, 'Applicant_QuoteAccuracyAcceptance_Yes');
 
-    // Full debug log
+    // Debug log
     const filled = await page.evaluate(() => ({
       firstName: document.getElementById('Applicant_FirstName')?.value,
       lastName:  document.getElementById('Applicant_LastName')?.value,
@@ -284,7 +295,6 @@ app.post('/get-quote', async (req, res) => {
       ownership: document.getElementById('CurrentAddress_Ownership')?.value,
       term:      document.getElementById('AutoPolicyInfo_PolicyTerm')?.value,
       effDate:   document.getElementById('AutoPolicyInfo_EffectiveDate')?.value,
-      expDate:   document.getElementById('AutoPriorPolicyInfo_Expiration')?.value,
       carrier:   document.getElementById('AutoPriorPolicyInfo_PriorCarrier')?.value,
       credit:    document.getElementById('PolicyInfo_CreditCheckAuth_Yes')?.checked,
       terms:     document.getElementById('Applicant_TermsAcceptance_Yes')?.checked,
@@ -298,42 +308,28 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Quote Summary', 60000);
     console.log('Reached Quote Summary page!');
 
-    // Scrape quotes
+    // Scrape quotes with auto-refresh protection
     let quotes = [];
     let attempts = 0;
     while (attempts < 15) {
-      await page.waitForTimeout(5000);
-      attempts++;
-      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 300));
-      console.log('Page text sample:', pageText.replace(/\n/g,' '));
+      try {
+        await page.waitForTimeout(6000);
+        attempts++;
 
-      quotes = await page.evaluate(() => {
-        const results = [];
-        document.querySelectorAll('table tr').forEach(row => {
-          const img   = row.querySelector('img');
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 2) {
-            const carrier = img ? img.alt : cells[0].innerText.trim();
-            const text    = row.innerText;
-            const match   = text.match(/\$[\d,]+\.?\d*/g);
-            const skipWords = ['bodily', 'injury', 'property', 'damage', 'liability', 'medical', 'uninsured', 'underinsured', 'collision', 'comprehensive', 'coverage'];
-          const carrierLower = carrier.toLowerCase();
-          const isJunk = skipWords.some(w => carrierLower.includes(w));
-          if (carrier && carrier.length > 2 && match && match.length > 0 && !isJunk) {
-              const monthly = match[match.length - 1];
-              const term    = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
-              results.push({ carrier: carrier.trim(), term, monthly });
-            }
-          }
-        });
-        return results;
-      });
+        const pageText = await page.evaluate(() => document.body.innerText.substring(0, 300));
+        console.log('Attempt ' + attempts + ' page sample:', pageText.replace(/\n/g,' '));
 
-      console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
-      if (quotes.length > 0) break;
+        quotes = await scrapeQuotes(page);
+        console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
+        if (quotes.length > 0) break;
 
-      const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
-      if (!stillCalc && attempts > 3) { console.log('No more calculating'); break; }
+        const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
+        if (!stillCalc && attempts > 4) { console.log('No more calculating'); break; }
+
+      } catch(e) {
+        console.log('Attempt ' + attempts + ' interrupted (page refresh):', e.message);
+        await page.waitForTimeout(4000);
+      }
     }
 
     await browser.close();
