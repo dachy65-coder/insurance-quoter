@@ -338,8 +338,14 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Incident');
     console.log('Step 3 done');
 
-    // STEP 4
+  // STEP 4: Incidents - always select No
     console.log('Step 4: Incidents...');
+    await page.waitForTimeout(500);
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => {
+        if((r.value||'').toLowerCase() === 'no' || (r.value||'').toLowerCase().includes('none')) r.click();
+      });
+    });
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
