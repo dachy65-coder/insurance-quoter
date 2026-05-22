@@ -10,6 +10,65 @@ app.use(express.json());
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
 app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v4' }));
+// Scrape EZLynx vehicle options for a given year and make
+app.get('/get-models', async (req, res) => {
+  const { year, make } = req.query;
+  if (!year || !make) return res.json({ error: 'year and make required' });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process']
+    });
+    const page = await browser.newPage();
+    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    // Fill minimal Step 1
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')) { inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname'))  { inp.value='User';  inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))     { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address'))   { inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))      { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))       { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const ph = '9295551234';
+      const phones = Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3) { phones[0].value=ph.slice(0,3); phones[1].value=ph.slice(3,6); phones[2].value=ph.slice(6,10); phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+      document.querySelectorAll('select').forEach(sel => { if((sel.id||'').toLowerCase().includes('state')) { sel.value='NY'; sel.dispatchEvent(new Event('change',{bubbles:true})); } });
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
+    });
+    await page.evaluate(() => { document.querySelector('input[type="submit"]')?.click(); });
+    await page.waitForFunction(() => document.body.innerText.includes('Driver'), { timeout: 15000 });
+    // Skip driver
+    await page.evaluate(() => { document.querySelector('input[type="submit"]')?.click(); });
+    await page.waitForFunction(() => document.body.innerText.includes('Driver Summary'), { timeout: 15000 });
+    await page.evaluate(() => { document.querySelector('input[type="submit"]')?.click(); });
+    await page.waitForFunction(() => document.body.innerText.includes('Vehicle'), { timeout: 15000 });
+    // Set year and make
+    await page.evaluate((y) => {
+      document.querySelectorAll('select').forEach(sel => { if((sel.id||'').toLowerCase().includes('year')) { sel.value=y; sel.dispatchEvent(new Event('change',{bubbles:true})); } });
+    }, year);
+    await page.waitForTimeout(2000);
+    await page.evaluate((m) => {
+      document.querySelectorAll('select').forEach(sel => { if((sel.id||'').toLowerCase().includes('make')) { sel.value=m; sel.dispatchEvent(new Event('change',{bubbles:true})); } });
+    }, make.toUpperCase());
+    await page.waitForTimeout(2000);
+    // Get all model options
+    const models = await page.evaluate(() => {
+      const sel = Array.from(document.querySelectorAll('select')).find(s => (s.id||'').toLowerCase().includes('model') && !(s.id||'').toLowerCase().includes('sub'));
+      if (!sel) return [];
+      return Array.from(sel.options).filter(o => o.value !== '-1').map(o => o.text);
+    });
+    await browser.close();
+    res.json({ year, make, models });
+  } catch(e) {
+    if(browser) await browser.close().catch(()=>{});
+    res.json({ error: e.message });
+  }
+});
 
 async function waitForText(page, text, timeout = 20000) {
   try {
