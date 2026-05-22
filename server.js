@@ -165,6 +165,15 @@ async function fixVehicleSelects(page, data) {
     document.querySelectorAll('select').forEach(sel => {
       const id = (sel.id || '').toLowerCase();
       if (!id.startsWith('vehicle')) return; // Only fix vehicle selects
+      // Clear fake VIN from SubModel
+      if (id.includes('submodel')) {
+        for (const o of sel.options) {
+          if (!o.value.includes('|') && o.value !== '-1') { sel.value = o.value; break; }
+        }
+        // If all options have fake VIN, just leave as is
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
       if (sel.value === '-1' && sel.options.length > 1) {
         sel.value = sel.options[1].value;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
