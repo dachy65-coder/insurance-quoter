@@ -10,6 +10,60 @@ app.use(express.json());
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
 app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v7' }));
+app.get('/get-models', async (req, res) => {
+  const { year, make } = req.query;
+  if (!year || !make) return res.json({ error: 'year and make required' });
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
+    const page = await browser.newPage();
+    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      ['firstname','lastname','email','address','city','zip'].forEach(() => {});
+      const inputs = document.querySelectorAll('input[type="text"]');
+      inputs.forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')) { inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname'))  { inp.value='User'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))     { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')) { inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))      { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))       { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const ph='9295551234';
+      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3){phones[0].value=ph.slice(0,3);phones[1].value=ph.slice(3,6);phones[2].value=ph.slice(6,10);phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
+      document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
+      document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
+    });
+    await page.waitForTimeout(1000);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:20000});
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:20000});
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:20000});
+    await page.waitForTimeout(1000);
+    await page.select('#Vehicle1_Year', String(year));
+    await page.waitForTimeout(1500);
+    await page.evaluate((m)=>{
+      const sel=document.getElementById('Vehicle1_Make');
+      if(sel){for(const o of sel.options){if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));break;}}}
+    }, make.toUpperCase());
+    await page.waitForTimeout(2000);
+    const models = await page.evaluate(()=>{
+      const sel=document.getElementById('Vehicle1_Model');
+      if(!sel) return [];
+      return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
+    });
+    await browser.close();
+    res.json({ year, make, models });
+  } catch(e) {
+    if(browser) await browser.close().catch(()=>{});
+    res.json({ error: e.message, models: [] });
+  }
+});
 
 async function waitForText(page, text, timeout = 20000) {
   try {
