@@ -363,7 +363,12 @@ app.post('/get-quote', async (req, res) => {
     );
     console.log('Vehicle state before submit:', JSON.stringify(vState));
 
-    await clickSubmit(page);
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('input[type="submit"], button'));
+      const next = btns.find(b => (b.value||b.innerText||'').trim().toLowerCase() === 'next');
+      if (next) next.click();
+      else btns[btns.length-1]?.click();
+    });
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
     if (!vSummary) {
       const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
