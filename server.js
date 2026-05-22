@@ -347,7 +347,7 @@ app.post('/get-quote', async (req, res) => {
         if(d.coverage==='FullCoverage'&&r.value&&r.value.toLowerCase().includes('full')) r.click();
         if(d.coverage==='LiabilityOnly'&&r.value&&r.value.toLowerCase().includes('liab')) r.click();
       });
-      const today=new Date(); today.setDate(today.getDate()+7);
+      const today=new Date(); today.setDate(today.getDate()-7);
       const mm=String(today.getMonth()+1).padStart(2,'0');
       const dd=String(today.getDate()).padStart(2,'0');
       const yyyy=String(today.getFullYear());
