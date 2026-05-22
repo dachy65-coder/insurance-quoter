@@ -240,7 +240,7 @@ app.get('/get-models', async (req, res) => {
     await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:20000});
     await sleep(1000);
     await page.select('#Vehicle1_Year', String(year));
-    await sleep(1500);
+    await sleep(3000);
     await page.evaluate((m)=>{
       const sel=document.getElementById('Vehicle1_Make');
       if(sel){for(const o of sel.options){if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));break;}}}
@@ -596,15 +596,15 @@ async function runScraper() {
       document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
       document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
     });
-    await sleep(1500);
+    await sleep(3000);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:30000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:60000});
     await sleep(500);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:30000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:60000});
     await sleep(500);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:30000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:60000});
     await sleep(1000);
     console.log('Scraper: on vehicle page!');
 
