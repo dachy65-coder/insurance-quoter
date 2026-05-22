@@ -378,7 +378,7 @@ app.post('/get-quote', async (req, res) => {
 
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
     if (!vSummary) {
-      const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+      const vText = await page.evaluate(() => document.body.innerText.substring(0, 2000));
       console.log('Vehicle page error:', vText.replace(/\n/g,' '));
     }
     await page.waitForTimeout(500);
