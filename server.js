@@ -355,6 +355,18 @@ app.post('/get-quote', async (req, res) => {
     const vDebug = await page.evaluate(() =>
       Array.from(document.querySelectorAll('select')).map(s => ({ id: s.id, value: s.value, options: s.options.length }))
     );
+    // Log all options in model and submodel dropdowns
+    const dropdownDebug = await page.evaluate(() => {
+      const result = {};
+      document.querySelectorAll('select').forEach(sel => {
+        const id = sel.id;
+        if (id.includes('Model') || id.includes('SubModel')) {
+          result[id] = Array.from(sel.options).map(o => ({ value: o.value, text: o.text }));
+        }
+      });
+      return result;
+    });
+    console.log('Dropdown options:', JSON.stringify(dropdownDebug));
     console.log('Vehicle selects after fix:', JSON.stringify(vDebug));
 
     await page.waitForTimeout(500);
