@@ -1,4 +1,4 @@
-// v6
+// v7
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
@@ -9,14 +9,11 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v6' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v7' }));
 
 async function waitForText(page, text, timeout = 20000) {
   try {
-    await page.waitForFunction(
-      (t) => document.body.innerText.includes(t),
-      { timeout }, text
-    );
+    await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout }, text);
     return true;
   } catch (e) {
     console.log('Timeout waiting for text:', text);
@@ -26,10 +23,7 @@ async function waitForText(page, text, timeout = 20000) {
 
 async function clickSubmit(page) {
   await page.evaluate(() => {
-    const selectors = [
-      'input[value="Continue"]', 'input[value="Next"]', 'input[value="Submit"]',
-      'input[type="submit"]', 'button[type="submit"]'
-    ];
+    const selectors = ['input[value="Continue"]','input[value="Next"]','input[value="Submit"]','input[type="submit"]','button[type="submit"]'];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (el) { el.click(); return; }
@@ -50,10 +44,7 @@ async function typeField(page, id, value) {
 
 async function clickId(page, id) {
   try {
-    await page.evaluate((id) => {
-      const el = document.getElementById(id);
-      if (el) el.click();
-    }, id);
+    await page.evaluate((id) => { const el = document.getElementById(id); if (el) el.click(); }, id);
   } catch(e) {}
 }
 
@@ -82,34 +73,31 @@ async function waitForSelectOptions(page, keyword, minOptions = 2, timeout = 800
   }
 }
 
-// Fill year/make/model using nativeSelect - returns selectors for re-use
 async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
-  // Get year selector
+  // Year
   const yearSelId = await page.evaluate(() => {
     const sel = Array.from(document.querySelectorAll('select')).find(s =>
       (s.id||'').toLowerCase().includes('year') && (s.id||'').toLowerCase().includes('vehicle'));
     return sel ? '#' + sel.id : null;
   });
-  console.log('Year selector:', yearSelId);
   if (yearSelId) await nativeSelect(page, yearSelId, String(vehicleYear));
   await waitForSelectOptions(page, 'make', 5, 8000);
   await page.waitForTimeout(1000);
 
-  // Get make value
+  // Make
   const makeResult = await page.evaluate((make) => {
     const sel = Array.from(document.querySelectorAll('select')).find(s => (s.id||'').toLowerCase().includes('make'));
     if (!sel) return null;
     for(const o of sel.options) {
-      if(o.value.toUpperCase()===make||o.text.toUpperCase()===make) return { id: '#'+sel.id, value: o.value };
+      if(o.value.toUpperCase()===make||o.text.toUpperCase()===make) return { id:'#'+sel.id, value:o.value };
     }
-    return { id: '#'+sel.id, value: null };
+    return { id:'#'+sel.id, value:null };
   }, vehicleMake.toUpperCase());
-  console.log('Make result:', makeResult);
   if (makeResult && makeResult.value) await nativeSelect(page, makeResult.id, makeResult.value);
   await waitForSelectOptions(page, 'model', 5, 8000);
   await page.waitForTimeout(1000);
 
-  // Get model value
+  // Model
   const modelResult = await page.evaluate((model) => {
     const sel = Array.from(document.querySelectorAll('select')).find(s =>
       (s.id||'').toLowerCase().includes('model') && !(s.id||'').toLowerCase().includes('sub'));
@@ -129,7 +117,6 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
         return { id:'#'+sel.id, value:o.value, match:'contains' };
       }
     }
-    // Fallback: LX or EX trim
     for(const o of sel.options) {
       const t=o.text.toLowerCase();
       if(t.startsWith(modelClean)&&(t.includes(' lx')||t.includes(' ex')||t.includes(' se'))) {
@@ -139,11 +126,53 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
     if(sel.options.length>1) return { id:'#'+sel.id, value:sel.options[1].value, match:'first' };
     return null;
   }, vehicleModel||'');
-  console.log('Model result:', modelResult);
+  console.log('Model result:', JSON.stringify(modelResult));
   if (modelResult && modelResult.value) await nativeSelect(page, modelResult.id, modelResult.value);
   await page.waitForTimeout(2000);
 
-  return { yearSelId, makeResult, modelResult };
+  // SubModel — always pick first real option (index 1)
+  await page.evaluate(() => {
+    const sub = document.getElementById('Vehicle1_SubModel');
+    if (sub && sub.options.length > 1) {
+      sub.value = sub.options[1].value;
+      sub.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  await page.waitForTimeout(500);
+}
+
+async function fixVehicleSelects(page, data) {
+  await page.evaluate((d) => {
+    document.querySelectorAll('select').forEach(sel => {
+      const id=(sel.id||'').toLowerCase();
+      if(!id.startsWith('vehicle')) return;
+      if(id.includes('submodel')) return; // Don't touch SubModel
+      if(sel.value==='-1'&&sel.options.length>1) {
+        sel.value=sel.options[1].value;
+        sel.dispatchEvent(new Event('change',{bubbles:true}));
+      }
+      if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')) {
+        for(const o of sel.options){ if(o.value==='Item500'||o.value==='500'){sel.value=o.value;break;} }
+        if(sel.value==='NoCoverage'||sel.value==='-1') sel.value=sel.options[1].value;
+        sel.dispatchEvent(new Event('change',{bubbles:true}));
+      }
+    });
+    document.querySelectorAll('input[type="radio"]').forEach(r => {
+      if(r.value===d.ownership) r.click();
+      if(d.coverage==='FullCoverage'&&r.value&&r.value.toLowerCase().includes('full')) r.click();
+      if(d.coverage==='LiabilityOnly'&&r.value&&r.value.toLowerCase().includes('liab')) r.click();
+    });
+    // Purchase date = 7 days ago
+    const pd=new Date(); pd.setDate(pd.getDate()-7);
+    const pmm=String(pd.getMonth()+1).padStart(2,'0');
+    const pdd=String(pd.getDate()).padStart(2,'0');
+    const pyyyy=String(pd.getFullYear());
+    const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
+    if(purchaseInputs.length>=3){
+      purchaseInputs[0].value=pmm; purchaseInputs[1].value=pdd; purchaseInputs[2].value=pyyyy;
+      purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));
+    }
+  }, data);
 }
 
 async function scrapeQuotes(page) {
@@ -196,12 +225,12 @@ app.post('/get-quote', async (req, res) => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
       document.querySelectorAll('input[type="text"],input[type="email"]').forEach(inp => {
         const id=(inp.id||'').toLowerCase();
-        if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('email'))     { inp.value=d.email;     inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('address')&&!id.includes('email')) { inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('city'))      { inp.value=d.city;      inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('zip'))       { inp.value=d.zip;       inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('firstname')){ inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))    { inp.value=d.email;     inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')){ inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))     { inp.value=d.city;      inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))      { inp.value=d.zip;       inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
       const ph=d.phone.replace(/\D/g,'');
       const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
@@ -216,7 +245,7 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
-    // STEP 2: Driver
+    // STEP 2
     console.log('Step 2: Filling driver...');
     await page.waitForTimeout(1000);
     const dob=(data.dob||'01/01/1990').split('/');
@@ -250,8 +279,6 @@ app.post('/get-quote', async (req, res) => {
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
 
-    let ymm = null;
-
     if (useVin) {
       console.log('Step 3: Using VIN:', data.vin);
       await page.evaluate(() => {
@@ -279,54 +306,18 @@ app.post('/get-quote', async (req, res) => {
       await waitForSelectOptions(page, 'year', 2, 10000);
       await page.waitForTimeout(2000);
     } else {
-      // Click "By year/make/model" radio
+      // Click By year/make/model radio
       await page.evaluate(() => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
           if(r.value&&r.value.toLowerCase().includes('year')) r.click();
         });
       });
       await page.waitForTimeout(500);
-      ymm = await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
+      await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
     }
-// Reset SubModel only if it has |0 (invalid price)
-    await page.evaluate(() => {
-      const sub = document.getElementById('Vehicle1_SubModel');
-      if (sub && sub.value && sub.value.endsWith('|0')) {
-        sub.value = '-1';
-        sub.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
-    await page.waitForTimeout(500);
-    // Fix remaining selects
-    await page.evaluate((d) => {
-      document.querySelectorAll('select').forEach(sel => {
-        const id=(sel.id||'').toLowerCase();
-        if(!id.startsWith('vehicle')) return;
-        if(sel.value==='-1'&&sel.options.length>1&&!id.includes('submodel')){
-          sel.value=sel.options[1].value;
-          sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-        if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')){
-          for(const o of sel.options){ if(o.value==='Item500'||o.value==='500'){sel.value=o.value;break;} }
-          if(sel.value==='NoCoverage'||sel.value==='-1') sel.value=sel.options[1].value;
-          sel.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-      });
-      document.querySelectorAll('input[type="radio"]').forEach(r => {
-        if(r.value===d.ownership) r.click();
-        if(d.coverage==='FullCoverage'&&r.value&&r.value.toLowerCase().includes('full')) r.click();
-        if(d.coverage==='LiabilityOnly'&&r.value&&r.value.toLowerCase().includes('liab')) r.click();
-      });
-      // Purchase date = 7 days ago
-      const pd=new Date(); pd.setDate(pd.getDate()-7);
-      const mm=String(pd.getMonth()+1).padStart(2,'0');
-      const dd=String(pd.getDate()).padStart(2,'0');
-      const yyyy=String(pd.getFullYear());
-      const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
-      console.log('Purchase inputs found:', purchaseInputs.length);
-      if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
-    }, data);
 
+    // Fix remaining selects and set purchase date
+    await fixVehicleSelects(page, data);
     await page.waitForTimeout(500);
 
     const vState = await page.evaluate(() =>
@@ -336,49 +327,31 @@ app.post('/get-quote', async (req, res) => {
 
     // Submit vehicle form
     await clickSubmit(page);
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(5000);
 
-    // Check if year got reset by ASP.NET postback
-    const yearAfterSubmit = await page.evaluate(() => {
-      const sel = document.getElementById('Vehicle1_Year');
-      return sel ? sel.value : 'not found';
-    });
-    console.log('Year after submit:', yearAfterSubmit);
+    // Check if still on vehicle page with errors (ASP.NET postback reset)
+    const stillOnVehiclePage = await page.evaluate(() =>
+      document.body.innerText.includes('Please correct the items')
+    );
+    console.log('Still on vehicle page after submit:', stillOnVehiclePage);
 
-    if (!useVin && (yearAfterSubmit === '-1' || yearAfterSubmit === '' || yearAfterSubmit === '--select--')) {
-      console.log('Year was reset! Re-filling vehicle and submitting again...');
+    if (!useVin && stillOnVehiclePage) {
+      console.log('Re-filling vehicle after postback reset...');
+      await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
+      await fixVehicleSelects(page, data);
       await page.waitForTimeout(1000);
-      if (ymm) {
-        await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
-      }
-      // Fix selects again
-      await page.evaluate((d) => {
-        document.querySelectorAll('select').forEach(sel => {
-          const id=(sel.id||'').toLowerCase();
-          if(!id.startsWith('vehicle')) return;
-          if(sel.value==='-1'&&sel.options.length>1&&!id.includes('submodel')){
-            sel.value=sel.options[1].value;
-            sel.dispatchEvent(new Event('change',{bubbles:true}));
-          }
-          if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')){
-            for(const o of sel.options){ if(o.value==='Item500'){sel.value=o.value;break;} }
-            sel.dispatchEvent(new Event('change',{bubbles:true}));
-          }
-        });
-        const pd=new Date(); pd.setDate(pd.getDate()-7);
-        const mm=String(pd.getMonth()+1).padStart(2,'0');
-        const dd=String(pd.getDate()).padStart(2,'0');
-        const yyyy=String(pd.getFullYear());
-        const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
-        if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
-      }, data);
-      await page.waitForTimeout(1000);
+
+      const vState2 = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
+      );
+      console.log('Vehicle state 2nd submit:', JSON.stringify(vState2));
       await clickSubmit(page);
+      await page.waitForTimeout(3000);
     }
 
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
     if (!vSummary) {
-      const vText = await page.evaluate(() => document.body.innerText.substring(0, 2000));
+      const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
       console.log('Vehicle page error:', vText.replace(/\n/g,' '));
     }
     await page.waitForTimeout(500);
@@ -400,7 +373,7 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
-    // STEP 5: Final Page
+    // STEP 5
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
     const today=new Date(); today.setDate(today.getDate()+7);
