@@ -439,7 +439,11 @@ app.post('/get-quote', async (req, res) => {
 
     await page.waitForTimeout(500);
     await clickSubmit(page);
-    await waitForText(page, 'Vehicle Summary');
+    const vSummaryReached = await waitForText(page, 'Vehicle Summary', 15000);
+    if (!vSummaryReached) {
+      const vPageText = await page.evaluate(() => document.body.innerText.substring(0, 1000));
+      console.log('Vehicle page after submit:', vPageText.replace(/\n/g,' '));
+    }
     await page.waitForTimeout(500);
     await clickSubmit(page);
     await waitForText(page, 'Incident');
