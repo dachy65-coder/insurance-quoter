@@ -288,7 +288,15 @@ app.post('/get-quote', async (req, res) => {
       await page.waitForTimeout(500);
       ymm = await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
     }
-
+// Reset SubModel only if it has |0 (invalid price)
+    await page.evaluate(() => {
+      const sub = document.getElementById('Vehicle1_SubModel');
+      if (sub && sub.value && sub.value.endsWith('|0')) {
+        sub.value = '-1';
+        sub.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    await page.waitForTimeout(500);
     // Fix remaining selects
     await page.evaluate((d) => {
       document.querySelectorAll('select').forEach(sel => {
