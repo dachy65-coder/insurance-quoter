@@ -537,5 +537,154 @@ app.post('/get-quote', async (req, res) => {
   }
 });
 
+// ─── SCRAPER ───────────────────────────────────────────────────────────────
+const https = require('https');
+
+const MAKES = [
+  'ACURA','ALFA ROMEO','AUDI','BMW','BUICK','CADILLAC','CHEVROLET','CHRYSLER',
+  'DODGE','FIAT','FORD','GENESIS','GMC','HONDA','HYUNDAI','INFINITI',
+  'JAGUAR','JEEP','KIA','LAND ROVER','LEXUS','LINCOLN','MASERATI','MAZDA',
+  'MERCEDES-BENZ','MINI','MITSUBISHI','NISSAN','PORSCHE','RAM','SUBARU',
+  'TESLA','TOYOTA','VOLKSWAGEN','VOLVO'
+];
+const MAKE_START_YEAR = {
+  'GENESIS':2017,'TESLA':2012,'ALFA ROMEO':2015,'FIAT':2012,'MASERATI':2014,'RAM':2010,'MINI':2002
+};
+
+let scrapeStatus = { running: false, current: '', progress: 0, total: 0, done: false, error: null };
+let scrapeResults = {};
+
+async function saveToGist(data) {
+  const token = process.env.GITHUB_TOKEN;
+  const gistId = process.env.GIST_ID;
+  if (!token || !gistId) return;
+  const body = JSON.stringify({ files: { 'ezlynx-models.json': { content: JSON.stringify(data, null, 2) } } });
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.github.com', path: `/gists/${gistId}`, method: 'PATCH',
+      headers: { 'Authorization': `token ${token}`, 'User-Agent': 'insurance-quoter', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, (res) => { res.on('data', ()=>{}); res.on('end', resolve); });
+    req.on('error', (e) => { console.log('Gist save error:', e.message); resolve(); });
+    req.write(body); req.end();
+  });
+}
+
+async function runScraper() {
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+
+    // Navigate to vehicle page once
+    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(2000);
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')){ inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value='User'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))    { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')){ inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))     { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))      { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const ph='9295551234';
+      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3){phones[0].value=ph.slice(0,3);phones[1].value=ph.slice(3,6);phones[2].value=ph.slice(6,10);phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
+      document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
+      document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
+    });
+    await sleep(1500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:30000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:30000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:30000});
+    await sleep(1000);
+    console.log('Scraper: on vehicle page!');
+
+    // Count total combinations
+    let total = 0;
+    for (const make of MAKES) {
+      const startYear = MAKE_START_YEAR[make] || 2000;
+      total += (2025 - startYear + 1);
+    }
+    scrapeStatus.total = total;
+    let done = 0;
+
+    for (const make of MAKES) {
+      if (!scrapeResults[make]) scrapeResults[make] = {};
+      const startYear = MAKE_START_YEAR[make] || 2000;
+      scrapeStatus.current = make;
+      console.log(`Scraping ${make}...`);
+
+      for (let year = 2025; year >= startYear; year--) {
+        if (scrapeResults[make][year]) { done++; scrapeStatus.progress = done; continue; }
+        try {
+          await page.select('#Vehicle1_Year', String(year));
+          await sleep(1200);
+          const makeSet = await page.evaluate((m) => {
+            const sel=document.getElementById('Vehicle1_Make');
+            if(!sel) return false;
+            for(const o of sel.options){ if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));return true;} }
+            return false;
+          }, make);
+          if (!makeSet) { done++; scrapeStatus.progress = done; continue; }
+          await sleep(2000);
+          const models = await page.evaluate(() => {
+            const sel=document.getElementById('Vehicle1_Model');
+            if(!sel) return [];
+            return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
+          });
+          if (models.length > 0) {
+            scrapeResults[make][year] = models;
+            console.log(`  ${year} ${make}: ${models.length} models`);
+          }
+        } catch(e) {
+          console.log(`  ${year} ${make}: error - ${e.message}`);
+        }
+        done++; scrapeStatus.progress = done;
+        await sleep(300);
+      }
+
+      // Save to Gist after each make
+      await saveToGist(scrapeResults);
+      console.log(`Saved ${make} to Gist`);
+    }
+
+    await browser.close();
+    scrapeStatus.running = false;
+    scrapeStatus.done = true;
+    console.log('Scrape complete!');
+  } catch(e) {
+    console.error('Scraper error:', e.message);
+    scrapeStatus.running = false;
+    scrapeStatus.error = e.message;
+    if (browser) await browser.close().catch(()=>{});
+  }
+}
+
+app.get('/start-scrape', (req, res) => {
+  if (scrapeStatus.running) return res.json({ message: 'Already running', status: scrapeStatus });
+  scrapeStatus = { running: true, current: '', progress: 0, total: 0, done: false, error: null };
+  scrapeResults = {};
+  runScraper();
+  res.json({ message: 'Scrape started!', status: scrapeStatus });
+});
+
+app.get('/scrape-status', (req, res) => {
+  res.json({ ...scrapeStatus, makes: Object.keys(scrapeResults).length, gistId: process.env.GIST_ID });
+});
+
+app.get('/scrape-result', (req, res) => {
+  res.json(scrapeResults);
+});
+// ───────────────────────────────────────────────────────────────────────────
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Server running on port ' + PORT));
