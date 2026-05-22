@@ -1,4 +1,4 @@
-// v5
+// v6
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
@@ -9,14 +9,13 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v5' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v6' }));
 
 async function waitForText(page, text, timeout = 20000) {
   try {
     await page.waitForFunction(
       (t) => document.body.innerText.includes(t),
-      { timeout },
-      text
+      { timeout }, text
     );
     return true;
   } catch (e) {
@@ -28,11 +27,8 @@ async function waitForText(page, text, timeout = 20000) {
 async function clickSubmit(page) {
   await page.evaluate(() => {
     const selectors = [
-      'input[value="Continue"]',
-      'input[value="Next"]',
-      'input[value="Submit"]',
-      'input[type="submit"]',
-      'button[type="submit"]'
+      'input[value="Continue"]', 'input[value="Next"]', 'input[value="Submit"]',
+      'input[type="submit"]', 'button[type="submit"]'
     ];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
@@ -49,9 +45,7 @@ async function typeField(page, id, value) {
     await page.keyboard.press('Backspace');
     await el.type(String(value), { delay: 20 });
     await page.keyboard.press('Tab');
-  } catch(e) {
-    console.log('typeField failed for', id, ':', e.message);
-  }
+  } catch(e) { console.log('typeField failed:', id, e.message); }
 }
 
 async function clickId(page, id) {
@@ -63,7 +57,6 @@ async function clickId(page, id) {
   } catch(e) {}
 }
 
-// Use Puppeteer native page.select() to properly select dropdown value
 async function nativeSelect(page, selector, value) {
   try {
     await page.waitForSelector(selector, { timeout: 5000 });
@@ -73,24 +66,6 @@ async function nativeSelect(page, selector, value) {
     console.log('nativeSelect failed:', selector, value, e.message);
     return false;
   }
-}
-
-// Find select ID by keyword and select value
-async function selectByKeyword(page, keyword, matchFn) {
-  return await page.evaluate((kw, matchFnStr) => {
-    const fn = new Function('value', 'text', matchFnStr);
-    const sels = Array.from(document.querySelectorAll('select'));
-    const sel = sels.find(s => (s.id || s.name || '').toLowerCase().includes(kw));
-    if (!sel) return null;
-    for (const o of sel.options) {
-      if (fn(o.value, o.text)) {
-        sel.value = o.value;
-        sel.dispatchEvent(new Event('change', { bubbles: true }));
-        return { id: sel.id, value: o.value, text: o.text };
-      }
-    }
-    return { id: sel.id, value: sel.value, notFound: true };
-  }, keyword, matchFn.toString().replace(/^[^{]*{/, '').replace(/}[^}]*$/, ''));
 }
 
 async function waitForSelectOptions(page, keyword, minOptions = 2, timeout = 8000) {
@@ -107,22 +82,86 @@ async function waitForSelectOptions(page, keyword, minOptions = 2, timeout = 800
   }
 }
 
+// Fill year/make/model using nativeSelect - returns selectors for re-use
+async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
+  // Get year selector
+  const yearSelId = await page.evaluate(() => {
+    const sel = Array.from(document.querySelectorAll('select')).find(s =>
+      (s.id||'').toLowerCase().includes('year') && (s.id||'').toLowerCase().includes('vehicle'));
+    return sel ? '#' + sel.id : null;
+  });
+  console.log('Year selector:', yearSelId);
+  if (yearSelId) await nativeSelect(page, yearSelId, String(vehicleYear));
+  await waitForSelectOptions(page, 'make', 5, 8000);
+  await page.waitForTimeout(1000);
+
+  // Get make value
+  const makeResult = await page.evaluate((make) => {
+    const sel = Array.from(document.querySelectorAll('select')).find(s => (s.id||'').toLowerCase().includes('make'));
+    if (!sel) return null;
+    for(const o of sel.options) {
+      if(o.value.toUpperCase()===make||o.text.toUpperCase()===make) return { id: '#'+sel.id, value: o.value };
+    }
+    return { id: '#'+sel.id, value: null };
+  }, vehicleMake.toUpperCase());
+  console.log('Make result:', makeResult);
+  if (makeResult && makeResult.value) await nativeSelect(page, makeResult.id, makeResult.value);
+  await waitForSelectOptions(page, 'model', 5, 8000);
+  await page.waitForTimeout(1000);
+
+  // Get model value
+  const modelResult = await page.evaluate((model) => {
+    const sel = Array.from(document.querySelectorAll('select')).find(s =>
+      (s.id||'').toLowerCase().includes('model') && !(s.id||'').toLowerCase().includes('sub'));
+    if (!sel) return null;
+    const modelClean = model.toLowerCase().trim();
+    for(const o of sel.options) {
+      if(o.text.toLowerCase()===modelClean) return { id:'#'+sel.id, value:o.value, match:'exact' };
+    }
+    for(const o of sel.options) {
+      if(o.text.toLowerCase().startsWith(modelClean+' ')||o.text.toLowerCase().startsWith(modelClean)) {
+        return { id:'#'+sel.id, value:o.value, match:'startsWith' };
+      }
+    }
+    for(const o of sel.options) {
+      const optClean=o.text.toLowerCase().replace(/\b[a-z]\d{3,4}\b/gi,'').trim();
+      if(optClean.includes(modelClean)||modelClean.includes(optClean)) {
+        return { id:'#'+sel.id, value:o.value, match:'contains' };
+      }
+    }
+    // Fallback: LX or EX trim
+    for(const o of sel.options) {
+      const t=o.text.toLowerCase();
+      if(t.startsWith(modelClean)&&(t.includes(' lx')||t.includes(' ex')||t.includes(' se'))) {
+        return { id:'#'+sel.id, value:o.value, match:'trim' };
+      }
+    }
+    if(sel.options.length>1) return { id:'#'+sel.id, value:sel.options[1].value, match:'first' };
+    return null;
+  }, vehicleModel||'');
+  console.log('Model result:', modelResult);
+  if (modelResult && modelResult.value) await nativeSelect(page, modelResult.id, modelResult.value);
+  await page.waitForTimeout(2000);
+
+  return { yearSelId, makeResult, modelResult };
+}
+
 async function scrapeQuotes(page) {
   return await page.evaluate(() => {
     const results = [];
     const skipWords = ['bodily','injury','property','damage','liability','medical','uninsured','underinsured','collision','comprehensive','coverage','deductible','protection'];
     document.querySelectorAll('table tr').forEach(row => {
-      const img   = row.querySelector('img');
+      const img = row.querySelector('img');
       const cells = row.querySelectorAll('td');
       if (cells.length >= 2) {
         const carrier = img ? img.alt : cells[0].innerText.trim().split('\n')[0];
-        const text    = row.innerText;
-        const match   = text.match(/\$[\d,]+\.?\d*/g);
+        const text = row.innerText;
+        const match = text.match(/\$[\d,]+\.?\d*/g);
         const carrierLower = carrier.toLowerCase();
         const isJunk = skipWords.some(w => carrierLower.includes(w));
         if (carrier && carrier.length > 2 && !isJunk && match && match.length > 0) {
           const monthly = match[match.length - 1];
-          const term    = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
+          const term = match.length > 1 ? 'Auto - ' + match[0] + ' (6 Months)' : 'Auto (6 Months)';
           results.push({ carrier: carrier.trim(), term, monthly });
         }
       }
@@ -137,6 +176,7 @@ app.post('/get-quote', async (req, res) => {
   const useVin = data.vehicleEntryMethod === 'vin' && data.vin && data.vin.length === 17;
   console.log('Quote request:', data.firstName, data.lastName,
     useVin ? 'VIN:' + data.vin : data.vehicleYear + ' ' + data.vehicleMake + ' ' + data.vehicleModel);
+
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -152,30 +192,25 @@ app.post('/get-quote', async (req, res) => {
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await waitForText(page, 'Getting Started');
     console.log('Step 1: Filling form...');
-
     await page.evaluate((d) => {
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
       document.querySelectorAll('input[type="text"],input[type="email"]').forEach(inp => {
-        const id = (inp.id||'').toLowerCase();
+        const id=(inp.id||'').toLowerCase();
         if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('email'))     { inp.value=d.email;     inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('address') && !id.includes('email')) { inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')) { inp.value=d.address; inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('city'))      { inp.value=d.city;      inp.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('zip'))       { inp.value=d.zip;       inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
-      const ph = d.phone.replace(/\D/g,'');
-      const phoneInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
-      if(phoneInputs.length>=3) {
-        phoneInputs[0].value=ph.slice(0,3); phoneInputs[1].value=ph.slice(3,6); phoneInputs[2].value=ph.slice(6,10);
-        phoneInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));
-      }
+      const ph=d.phone.replace(/\D/g,'');
+      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3){ phones[0].value=ph.slice(0,3); phones[1].value=ph.slice(3,6); phones[2].value=ph.slice(6,10); phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
       document.querySelectorAll('select').forEach(sel => {
-        if((sel.id||'').toLowerCase().includes('state')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if((sel.id||'').toLowerCase().includes('state')){ sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
-
     await page.waitForTimeout(1000);
     await clickSubmit(page);
     await waitForText(page, 'Driver');
@@ -184,12 +219,12 @@ app.post('/get-quote', async (req, res) => {
     // STEP 2: Driver
     console.log('Step 2: Filling driver...');
     await page.waitForTimeout(1000);
-    const dob = (data.dob || '01/01/1990').split('/');
+    const dob=(data.dob||'01/01/1990').split('/');
     await page.evaluate((d, dob) => {
       document.querySelectorAll('input[type="text"]').forEach(inp => {
         const id=(inp.id||'').toLowerCase();
-        if(id.includes('firstname')) { inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('lastname'))  { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('firstname')){ inp.value=d.firstName; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value=d.lastName;  inp.dispatchEvent(new Event('change',{bubbles:true})); }
       });
       const dobInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('dob')||(i.id||'').toLowerCase().includes('birth'));
       if(dobInputs.length>=3){ dobInputs[0].value=dob[0]||'01'; dobInputs[1].value=dob[1]||'01'; dobInputs[2].value=dob[2]||'1990'; dobInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
@@ -197,7 +232,7 @@ app.post('/get-quote', async (req, res) => {
         const id=(sel.id||'').toLowerCase();
         if(id.includes('gender'))  { sel.value=d.gender||'Male'; sel.dispatchEvent(new Event('change',{bubbles:true})); }
         if(id.includes('marital')) { sel.value='Single';          sel.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('license')||id.includes('dlstate')) { sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('license')||id.includes('dlstate')){ sel.value=d.state; sel.dispatchEvent(new Event('change',{bubbles:true})); }
       });
     }, data, dob);
     await typeField(page, 'Driver1_DOB',   dob[0]||'01');
@@ -211,16 +246,18 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
-    // STEP 3: Vehicle - using native page.select() to prevent resets
+    // STEP 3: Vehicle
     console.log('Step 3: Filling vehicle...');
     await page.waitForTimeout(1000);
+
+    let ymm = null;
 
     if (useVin) {
       console.log('Step 3: Using VIN:', data.vin);
       await page.evaluate(() => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
-          const val = (r.value||'').toUpperCase();
-          const label = ((r.closest('label')||r.parentElement||{}).innerText||'').toUpperCase();
+          const val=(r.value||'').toUpperCase();
+          const label=((r.closest('label')||r.parentElement||{}).innerText||'').toUpperCase();
           if(val==='VIN'||label.includes('BY VIN')||label.includes('VIN')) r.click();
         });
       });
@@ -228,116 +265,41 @@ app.post('/get-quote', async (req, res) => {
       await page.evaluate((vin) => {
         document.querySelectorAll('input[type="text"]').forEach(inp => {
           const id=(inp.id||inp.name||'').toUpperCase();
-          if(id.includes('VIN')) { inp.value=vin; inp.dispatchEvent(new Event('input',{bubbles:true})); inp.dispatchEvent(new Event('change',{bubbles:true})); }
+          if(id.includes('VIN')){ inp.value=vin; inp.dispatchEvent(new Event('input',{bubbles:true})); inp.dispatchEvent(new Event('change',{bubbles:true})); }
         });
       }, data.vin);
       await page.waitForTimeout(500);
       const lookupClicked = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('input, button'));
-        const btn = btns.find(b => (b.value||b.innerText||b.textContent||'').toLowerCase().includes('lookup'));
-        if(btn) { btn.click(); return true; }
+        const btns=Array.from(document.querySelectorAll('input, button'));
+        const btn=btns.find(b=>(b.value||b.innerText||b.textContent||'').toLowerCase().includes('lookup'));
+        if(btn){ btn.click(); return true; }
         return false;
       });
       console.log('VIN lookup clicked:', lookupClicked);
       await waitForSelectOptions(page, 'year', 2, 10000);
       await page.waitForTimeout(2000);
-
     } else {
       // Click "By year/make/model" radio
       await page.evaluate(() => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
-          if(r.value && r.value.toLowerCase().includes('year')) r.click();
+          if(r.value&&r.value.toLowerCase().includes('year')) r.click();
         });
       });
       await page.waitForTimeout(500);
-
-      // Get the year select ID
-      const yearSelId = await page.evaluate(() => {
-        const sel = Array.from(document.querySelectorAll('select')).find(s => (s.id||'').toLowerCase().includes('year') && (s.id||'').toLowerCase().includes('vehicle'));
-        return sel ? '#' + sel.id : null;
-      });
-
-      console.log('Step 3: Setting year', data.vehicleYear, 'selector:', yearSelId);
-      if (yearSelId) {
-        await nativeSelect(page, yearSelId, String(data.vehicleYear));
-      }
-
-      await waitForSelectOptions(page, 'make', 5, 8000);
-      await page.waitForTimeout(1000);
-
-      // Get make select ID and find matching value
-      const makeResult = await page.evaluate((make) => {
-        const sel = Array.from(document.querySelectorAll('select')).find(s => (s.id||'').toLowerCase().includes('make'));
-        if (!sel) return null;
-        for(const o of sel.options) {
-          if(o.value.toUpperCase()===make||o.text.toUpperCase()===make) return { id: '#'+sel.id, value: o.value };
-        }
-        return { id: '#'+sel.id, value: null };
-      }, data.vehicleMake.toUpperCase());
-
-      console.log('Step 3: Setting make', data.vehicleMake, makeResult);
-      if (makeResult && makeResult.value) {
-        await nativeSelect(page, makeResult.id, makeResult.value);
-      }
-
-      await waitForSelectOptions(page, 'model', 5, 8000);
-      await page.waitForTimeout(1000);
-
-      // Get model select ID and find matching value
-      const modelResult = await page.evaluate((model) => {
-        const sel = Array.from(document.querySelectorAll('select')).find(s =>
-          (s.id||'').toLowerCase().includes('model') && !(s.id||'').toLowerCase().includes('sub'));
-        if (!sel) return null;
-        const modelClean = model.toLowerCase().trim();
-        // Try exact match first
-        for(const o of sel.options) {
-          if(o.text.toLowerCase() === modelClean) return { id: '#'+sel.id, value: o.value, match: 'exact' };
-        }
-        // Try starts with model name
-        for(const o of sel.options) {
-          if(o.text.toLowerCase().startsWith(modelClean + ' ') || o.text.toLowerCase().startsWith(modelClean)) {
-            return { id: '#'+sel.id, value: o.value, match: 'startsWith' };
-          }
-        }
-        // Try contains
-        for(const o of sel.options) {
-          const optClean = o.text.toLowerCase().replace(/\b[a-z]\d{3,4}\b/gi,'').trim();
-          if(optClean.includes(modelClean)||modelClean.includes(optClean)) {
-            return { id: '#'+sel.id, value: o.value, match: 'contains' };
-          }
-        }
-        // Fallback: LX or EX trim
-        for(const o of sel.options) {
-          const t = o.text.toLowerCase();
-          if(t.startsWith(modelClean) && (t.includes(' lx')||t.includes(' ex')||t.includes(' se'))) {
-            return { id: '#'+sel.id, value: o.value, match: 'trim' };
-          }
-        }
-        // Last resort: first option
-        if(sel.options.length > 1) return { id: '#'+sel.id, value: sel.options[1].value, match: 'first' };
-        return null;
-      }, data.vehicleModel || '');
-
-      console.log('Step 3: Setting model', data.vehicleModel, modelResult);
-      if (modelResult && modelResult.value) {
-        await nativeSelect(page, modelResult.id, modelResult.value);
-      }
+      ymm = await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
     }
 
-    // Wait for all dependent dropdowns to populate
-    await page.waitForTimeout(2000);
-
-    // Fix remaining -1 selects and set coverage/ownership
+    // Fix remaining selects
     await page.evaluate((d) => {
       document.querySelectorAll('select').forEach(sel => {
-        const id = (sel.id||'').toLowerCase();
-        if (!id.startsWith('vehicle')) return;
-        if (sel.value==='-1' && sel.options.length>1 && !id.includes('submodel')) {
+        const id=(sel.id||'').toLowerCase();
+        if(!id.startsWith('vehicle')) return;
+        if(sel.value==='-1'&&sel.options.length>1&&!id.includes('submodel')){
           sel.value=sel.options[1].value;
           sel.dispatchEvent(new Event('change',{bubbles:true}));
         }
-        if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')) {
-          for(const o of sel.options) { if(o.value==='Item500'||o.value==='500'){sel.value=o.value;break;} }
+        if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')){
+          for(const o of sel.options){ if(o.value==='Item500'||o.value==='500'){sel.value=o.value;break;} }
           if(sel.value==='NoCoverage'||sel.value==='-1') sel.value=sel.options[1].value;
           sel.dispatchEvent(new Event('change',{bubbles:true}));
         }
@@ -347,28 +309,65 @@ app.post('/get-quote', async (req, res) => {
         if(d.coverage==='FullCoverage'&&r.value&&r.value.toLowerCase().includes('full')) r.click();
         if(d.coverage==='LiabilityOnly'&&r.value&&r.value.toLowerCase().includes('liab')) r.click();
       });
-      const today=new Date(); today.setDate(today.getDate()-7);
-      const mm=String(today.getMonth()+1).padStart(2,'0');
-      const dd=String(today.getDate()).padStart(2,'0');
-      const yyyy=String(today.getFullYear());
+      // Purchase date = 7 days ago
+      const pd=new Date(); pd.setDate(pd.getDate()-7);
+      const mm=String(pd.getMonth()+1).padStart(2,'0');
+      const dd=String(pd.getDate()).padStart(2,'0');
+      const yyyy=String(pd.getFullYear());
       const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
-      if(purchaseInputs.length>=3){purchaseInputs[0].value=mm;purchaseInputs[1].value=dd;purchaseInputs[2].value=yyyy;purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
+      console.log('Purchase inputs found:', purchaseInputs.length);
+      if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
     }, data);
 
     await page.waitForTimeout(500);
 
-    // Log vehicle state before submitting
     const vState = await page.evaluate(() =>
       Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
     );
     console.log('Vehicle state before submit:', JSON.stringify(vState));
 
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('input[type="submit"], button'));
-      const next = btns.find(b => (b.value||b.innerText||'').trim().toLowerCase() === 'next');
-      if (next) next.click();
-      else btns[btns.length-1]?.click();
+    // Submit vehicle form
+    await clickSubmit(page);
+    await page.waitForTimeout(3000);
+
+    // Check if year got reset by ASP.NET postback
+    const yearAfterSubmit = await page.evaluate(() => {
+      const sel = document.getElementById('Vehicle1_Year');
+      return sel ? sel.value : 'not found';
     });
+    console.log('Year after submit:', yearAfterSubmit);
+
+    if (!useVin && (yearAfterSubmit === '-1' || yearAfterSubmit === '' || yearAfterSubmit === '--select--')) {
+      console.log('Year was reset! Re-filling vehicle and submitting again...');
+      await page.waitForTimeout(1000);
+      if (ymm) {
+        await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
+      }
+      // Fix selects again
+      await page.evaluate((d) => {
+        document.querySelectorAll('select').forEach(sel => {
+          const id=(sel.id||'').toLowerCase();
+          if(!id.startsWith('vehicle')) return;
+          if(sel.value==='-1'&&sel.options.length>1&&!id.includes('submodel')){
+            sel.value=sel.options[1].value;
+            sel.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+          if((id.includes('comprehensive')||id.includes('collision'))&&(sel.value==='NoCoverage'||sel.value==='-1')){
+            for(const o of sel.options){ if(o.value==='Item500'){sel.value=o.value;break;} }
+            sel.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+        });
+        const pd=new Date(); pd.setDate(pd.getDate()-7);
+        const mm=String(pd.getMonth()+1).padStart(2,'0');
+        const dd=String(pd.getDate()).padStart(2,'0');
+        const yyyy=String(pd.getFullYear());
+        const purchaseInputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('purchase'));
+        if(purchaseInputs.length>=3){ purchaseInputs[0].value=mm; purchaseInputs[1].value=dd; purchaseInputs[2].value=yyyy; purchaseInputs.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true}))); }
+      }, data);
+      await page.waitForTimeout(1000);
+      await clickSubmit(page);
+    }
+
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
     if (!vSummary) {
       const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
@@ -396,36 +395,33 @@ app.post('/get-quote', async (req, res) => {
     // STEP 5: Final Page
     console.log('Step 5: Final page...');
     await page.waitForTimeout(2000);
-
-    const today = new Date();
-    today.setDate(today.getDate() + 7);
-    const mm   = String(today.getMonth() + 1).padStart(2, '0');
-    const dd   = String(today.getDate()).padStart(2, '0');
-    const yyyy = String(today.getFullYear());
-    const ph   = data.phone.replace(/\D/g, '');
+    const today=new Date(); today.setDate(today.getDate()+7);
+    const mm=String(today.getMonth()+1).padStart(2,'0');
+    const dd=String(today.getDate()).padStart(2,'0');
+    const yyyy=String(today.getFullYear());
+    const ph=data.phone.replace(/\D/g,'');
 
     console.log('Step 5: Setting selects...');
     await page.evaluate((state, insurer) => {
       function setSelect(id, matchFn) {
-        const el = document.getElementById(id);
-        if (!el) return;
-        for (const o of el.options) { if (matchFn(o.value, o.text)) { el.value = o.value; break; } }
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+        const el=document.getElementById(id);
+        if(!el) return;
+        for(const o of el.options){ if(matchFn(o.value,o.text)){el.value=o.value;break;} }
+        el.dispatchEvent(new Event('change',{bubbles:true}));
       }
-      const stateEl = document.getElementById('Applicant_State');
-      if (stateEl) { stateEl.value = state; stateEl.dispatchEvent(new Event('change', { bubbles: true })); }
-      setSelect('CurrentAddress_Ownership', (v, t) => v.toLowerCase().includes('own') || t.toLowerCase().includes('own'));
-      setSelect('AutoPolicyInfo_PolicyTerm', (v, t) => v === '6' || t.includes('6'));
-      const norm = s => s.toLowerCase().replace(/[\s\-\_\.]/g, '');
-      if (insurer && insurer !== 'None') {
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '-1' && norm(t).includes(norm(insurer)));
+      const stateEl=document.getElementById('Applicant_State');
+      if(stateEl){ stateEl.value=state; stateEl.dispatchEvent(new Event('change',{bubbles:true})); }
+      setSelect('CurrentAddress_Ownership',(v,t)=>v.toLowerCase().includes('own')||t.toLowerCase().includes('own'));
+      setSelect('AutoPolicyInfo_PolicyTerm',(v,t)=>v==='6'||t.includes('6'));
+      const norm=s=>s.toLowerCase().replace(/[\s\-\_\.]/g,'');
+      if(insurer&&insurer!=='None'){
+        setSelect('AutoPriorPolicyInfo_PriorCarrier',(v,t)=>v!=='-1'&&norm(t).includes(norm(insurer)));
       } else {
-        setSelect('AutoPriorPolicyInfo_PriorCarrier', (v, t) => v !== '' && v !== '-1' && (t.toLowerCase().includes('no prior') || t.toLowerCase().includes('none')));
+        setSelect('AutoPriorPolicyInfo_PriorCarrier',(v,t)=>v!==''&&v!=='-1'&&(t.toLowerCase().includes('no prior')||t.toLowerCase().includes('none')));
       }
     }, data.state, insurer);
 
     await page.waitForTimeout(2000);
-
     console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
@@ -433,21 +429,20 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'Applicant_City',         data.city);
     await typeField(page, 'Applicant_Zip',          data.zip);
     await typeField(page, 'Applicant_Email',        data.email);
-    await typeField(page, 'Applicant_HomePhone',    ph.slice(0, 3));
-    await typeField(page, 'Applicant_HomePhone_1',  ph.slice(3, 6));
-    await typeField(page, 'Applicant_HomePhone_2',  ph.slice(6, 10));
+    await typeField(page, 'Applicant_HomePhone',    ph.slice(0,3));
+    await typeField(page, 'Applicant_HomePhone_1',  ph.slice(3,6));
+    await typeField(page, 'Applicant_HomePhone_2',  ph.slice(6,10));
     await typeField(page, 'AutoPolicyInfo_EffectiveDate',   mm);
     await typeField(page, 'AutoPolicyInfo_EffectiveDate_1', dd);
     await typeField(page, 'AutoPolicyInfo_EffectiveDate_2', yyyy);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration',   mm);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_1', dd);
     await typeField(page, 'AutoPriorPolicyInfo_Expiration_2', yyyy);
-
     await clickId(page, 'PolicyInfo_CreditCheckAuth_Yes');
     await clickId(page, 'Applicant_TermsAcceptance_Yes');
     await clickId(page, 'Applicant_QuoteAccuracyAcceptance_Yes');
 
-    const filled = await page.evaluate(() => ({
+    const filled=await page.evaluate(()=>({
       firstName: document.getElementById('Applicant_FirstName')?.value,
       lastName:  document.getElementById('Applicant_LastName')?.value,
       city:      document.getElementById('Applicant_City')?.value,
@@ -464,37 +459,37 @@ app.post('/get-quote', async (req, res) => {
     await waitForText(page, 'Quote Summary', 60000);
     console.log('Reached Quote Summary page!');
 
-    let quotes = [];
-    let attempts = 0;
-    while (attempts < 15) {
-      try {
+    let quotes=[];
+    let attempts=0;
+    while(attempts<15){
+      try{
         await page.waitForTimeout(6000);
         attempts++;
-        const pageText = await page.evaluate(() => document.body.innerText.substring(0, 300));
-        console.log('Attempt ' + attempts + ' page sample:', pageText.replace(/\n/g,' '));
-        quotes = await scrapeQuotes(page);
-        console.log('Attempt ' + attempts + ': found ' + quotes.length + ' quotes');
-        if (quotes.length > 0) break;
-        const stillCalc = await page.evaluate(() => document.body.innerText.includes('being calculated'));
-        if (!stillCalc && attempts > 4) { console.log('No more calculating'); break; }
-      } catch(e) {
-        console.log('Attempt ' + attempts + ' interrupted:', e.message);
+        const pageText=await page.evaluate(()=>document.body.innerText.substring(0,300));
+        console.log('Attempt '+attempts+' page sample:', pageText.replace(/\n/g,' '));
+        quotes=await scrapeQuotes(page);
+        console.log('Attempt '+attempts+': found '+quotes.length+' quotes');
+        if(quotes.length>0) break;
+        const stillCalc=await page.evaluate(()=>document.body.innerText.includes('being calculated'));
+        if(!stillCalc&&attempts>4){ console.log('No more calculating'); break; }
+      } catch(e){
+        console.log('Attempt '+attempts+' interrupted:', e.message);
         await page.waitForTimeout(4000);
       }
     }
 
     await browser.close();
-    if (quotes.length === 0) {
+    if(quotes.length===0){
       return res.status(200).json({
         success: false,
         message: 'Online quotes are not available for this vehicle. Please call Whitestone Insurance at (929) 292-8005 for a personalized quote.',
         quotes: []
       });
     }
-    console.log('Success! ' + quotes.length + ' quotes found');
+    console.log('Success! '+quotes.length+' quotes found');
     res.json({ success: true, quotes });
 
-  } catch(err) {
+  } catch(err){
     console.error('Error:', err.message);
     if(browser) await browser.close().catch(()=>{});
     res.status(500).json({ success: false, error: err.message });
