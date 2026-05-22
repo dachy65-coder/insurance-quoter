@@ -1,4 +1,4 @@
-// v7
+// v8
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
@@ -9,61 +9,9 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v7' }));
-app.get('/get-models', async (req, res) => {
-  const { year, make } = req.query;
-  if (!year || !make) return res.json({ error: 'year and make required' });
-  let browser;
-  try {
-    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
-    const page = await browser.newPage();
-    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.evaluate(() => {
-      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
-      ['firstname','lastname','email','address','city','zip'].forEach(() => {});
-      const inputs = document.querySelectorAll('input[type="text"]');
-      inputs.forEach(inp => {
-        const id=(inp.id||'').toLowerCase();
-        if(id.includes('firstname')) { inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('lastname'))  { inp.value='User'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('email'))     { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('address')&&!id.includes('email')) { inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('city'))      { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-        if(id.includes('zip'))       { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
-      });
-      const ph='9295551234';
-      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
-      if(phones.length>=3){phones[0].value=ph.slice(0,3);phones[1].value=ph.slice(3,6);phones[2].value=ph.slice(6,10);phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
-      document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
-      document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
-    });
-    await page.waitForTimeout(1000);
-    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:20000});
-    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:20000});
-    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:20000});
-    await page.waitForTimeout(1000);
-    await page.select('#Vehicle1_Year', String(year));
-    await page.waitForTimeout(1500);
-    await page.evaluate((m)=>{
-      const sel=document.getElementById('Vehicle1_Make');
-      if(sel){for(const o of sel.options){if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));break;}}}
-    }, make.toUpperCase());
-    await page.waitForTimeout(2000);
-    const models = await page.evaluate(()=>{
-      const sel=document.getElementById('Vehicle1_Model');
-      if(!sel) return [];
-      return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
-    });
-    await browser.close();
-    res.json({ year, make, models });
-  } catch(e) {
-    if(browser) await browser.close().catch(()=>{});
-    res.json({ error: e.message, models: [] });
-  }
-});
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v8' }));
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function waitForText(page, text, timeout = 20000) {
   try {
@@ -136,7 +84,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
   });
   if (yearSelId) await nativeSelect(page, yearSelId, String(vehicleYear));
   await waitForSelectOptions(page, 'make', 5, 8000);
-  await page.waitForTimeout(1000);
+  await new Promise(r => setTimeout(r, 1000));
 
   // Make
   const makeResult = await page.evaluate((make) => {
@@ -149,7 +97,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
   }, vehicleMake.toUpperCase());
   if (makeResult && makeResult.value) await nativeSelect(page, makeResult.id, makeResult.value);
   await waitForSelectOptions(page, 'model', 5, 8000);
-  await page.waitForTimeout(1000);
+  await new Promise(r => setTimeout(r, 1000));
 
   // Model
   const modelResult = await page.evaluate((model) => {
@@ -182,7 +130,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
   }, vehicleModel||'');
   console.log('Model result:', JSON.stringify(modelResult));
   if (modelResult && modelResult.value) await nativeSelect(page, modelResult.id, modelResult.value);
-  await page.waitForTimeout(2000);
+  await new Promise(r => setTimeout(r, 2000));
 
   // SubModel — always pick first real option (index 1)
   await page.evaluate(() => {
@@ -192,7 +140,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
       sub.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
-  await page.waitForTimeout(500);
+  await new Promise(r => setTimeout(r, 500));
 }
 
 async function fixVehicleSelects(page, data) {
@@ -253,6 +201,64 @@ async function scrapeQuotes(page) {
   });
 }
 
+
+app.get('/get-models', async (req, res) => {
+  const { year, make } = req.query;
+  if (!year || !make) return res.json({ error: 'year and make required' });
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(2000);
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')){ inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value='User'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))    { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')){ inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))     { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))      { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const ph='9295551234';
+      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3){phones[0].value=ph.slice(0,3);phones[1].value=ph.slice(3,6);phones[2].value=ph.slice(6,10);phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
+      document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
+      document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
+    });
+    await sleep(1000);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:20000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:20000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:20000});
+    await sleep(1000);
+    await page.select('#Vehicle1_Year', String(year));
+    await sleep(1500);
+    await page.evaluate((m)=>{
+      const sel=document.getElementById('Vehicle1_Make');
+      if(sel){for(const o of sel.options){if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));break;}}}
+    }, make.toUpperCase());
+    await sleep(2000);
+    const models = await page.evaluate(()=>{
+      const sel=document.getElementById('Vehicle1_Model');
+      if(!sel) return [];
+      return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
+    });
+    await browser.close();
+    res.json({ year, make, models });
+  } catch(e) {
+    if(browser) await browser.close().catch(()=>{});
+    res.json({ error: e.message, models: [] });
+  }
+});
+
 app.post('/get-quote', async (req, res) => {
   const data = req.body;
   const insurer = data.currentInsurer || 'None';
@@ -294,14 +300,14 @@ app.post('/get-quote', async (req, res) => {
       });
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
-    await page.waitForTimeout(1000);
+    await new Promise(r => setTimeout(r, 1000));
     await clickSubmit(page);
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
     // STEP 2
     console.log('Step 2: Filling driver...');
-    await page.waitForTimeout(1000);
+    await new Promise(r => setTimeout(r, 1000));
     const dob=(data.dob||'01/01/1990').split('/');
     await page.evaluate((d, dob) => {
       document.querySelectorAll('input[type="text"]').forEach(inp => {
@@ -321,17 +327,17 @@ app.post('/get-quote', async (req, res) => {
     await typeField(page, 'Driver1_DOB',   dob[0]||'01');
     await typeField(page, 'Driver1_DOB_1', dob[1]||'01');
     await typeField(page, 'Driver1_DOB_2', dob[2]||'1990');
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Driver Summary');
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
     // STEP 3: Vehicle
     console.log('Step 3: Filling vehicle...');
-    await page.waitForTimeout(1000);
+    await new Promise(r => setTimeout(r, 1000));
 
     if (useVin) {
       console.log('Step 3: Using VIN:', data.vin);
@@ -342,14 +348,14 @@ app.post('/get-quote', async (req, res) => {
           if(val==='VIN'||label.includes('BY VIN')||label.includes('VIN')) r.click();
         });
       });
-      await page.waitForTimeout(1000);
+      await new Promise(r => setTimeout(r, 1000));
       await page.evaluate((vin) => {
         document.querySelectorAll('input[type="text"]').forEach(inp => {
           const id=(inp.id||inp.name||'').toUpperCase();
           if(id.includes('VIN')){ inp.value=vin; inp.dispatchEvent(new Event('input',{bubbles:true})); inp.dispatchEvent(new Event('change',{bubbles:true})); }
         });
       }, data.vin);
-      await page.waitForTimeout(500);
+      await new Promise(r => setTimeout(r, 500));
       const lookupClicked = await page.evaluate(() => {
         const btns=Array.from(document.querySelectorAll('input, button'));
         const btn=btns.find(b=>(b.value||b.innerText||b.textContent||'').toLowerCase().includes('lookup'));
@@ -358,7 +364,7 @@ app.post('/get-quote', async (req, res) => {
       });
       console.log('VIN lookup clicked:', lookupClicked);
       await waitForSelectOptions(page, 'year', 2, 10000);
-      await page.waitForTimeout(2000);
+      await new Promise(r => setTimeout(r, 2000));
     } else {
       // Click By year/make/model radio
       await page.evaluate(() => {
@@ -366,13 +372,13 @@ app.post('/get-quote', async (req, res) => {
           if(r.value&&r.value.toLowerCase().includes('year')) r.click();
         });
       });
-      await page.waitForTimeout(500);
+      await new Promise(r => setTimeout(r, 500));
       await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
     }
 
     // Fix remaining selects and set purchase date
     await fixVehicleSelects(page, data);
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
 
     const vState = await page.evaluate(() =>
       Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
@@ -381,7 +387,7 @@ app.post('/get-quote', async (req, res) => {
 
     // Submit vehicle form
     await clickSubmit(page);
-    await page.waitForTimeout(5000);
+    await new Promise(r => setTimeout(r, 5000));
 
     // Check if still on vehicle page with errors (ASP.NET postback reset)
     const stillOnVehiclePage = await page.evaluate(() =>
@@ -393,14 +399,14 @@ app.post('/get-quote', async (req, res) => {
       console.log('Re-filling vehicle after postback reset...');
       await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
       await fixVehicleSelects(page, data);
-      await page.waitForTimeout(1000);
+      await new Promise(r => setTimeout(r, 1000));
 
       const vState2 = await page.evaluate(() =>
         Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
       );
       console.log('Vehicle state 2nd submit:', JSON.stringify(vState2));
       await clickSubmit(page);
-      await page.waitForTimeout(3000);
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
@@ -408,28 +414,28 @@ app.post('/get-quote', async (req, res) => {
       const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
       console.log('Vehicle page error:', vText.replace(/\n/g,' '));
     }
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Incident');
     console.log('Step 3 done');
 
     // STEP 4: Incidents
     console.log('Step 4: Incidents...');
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
     await page.evaluate(() => {
       document.querySelectorAll('input[type="radio"]').forEach(r => {
         const v=(r.value||'').toLowerCase();
         if(v==='no'||v==='none'||v==='false') r.click();
       });
     });
-    await page.waitForTimeout(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
     // STEP 5
     console.log('Step 5: Final page...');
-    await page.waitForTimeout(2000);
+    await new Promise(r => setTimeout(r, 2000));
     const today=new Date(); today.setDate(today.getDate()+7);
     const mm=String(today.getMonth()+1).padStart(2,'0');
     const dd=String(today.getDate()).padStart(2,'0');
@@ -456,7 +462,7 @@ app.post('/get-quote', async (req, res) => {
       }
     }, data.state, insurer);
 
-    await page.waitForTimeout(2000);
+    await new Promise(r => setTimeout(r, 2000));
     console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
@@ -488,7 +494,7 @@ app.post('/get-quote', async (req, res) => {
     }));
     console.log('Step 5 filled:', JSON.stringify(filled));
 
-    await page.waitForTimeout(1000);
+    await new Promise(r => setTimeout(r, 1000));
     await clickSubmit(page);
     console.log('Step 5: Submitted, waiting for Quote Summary...');
     await waitForText(page, 'Quote Summary', 60000);
@@ -498,7 +504,7 @@ app.post('/get-quote', async (req, res) => {
     let attempts=0;
     while(attempts<15){
       try{
-        await page.waitForTimeout(6000);
+        await new Promise(r => setTimeout(r, 6000));
         attempts++;
         const pageText=await page.evaluate(()=>document.body.innerText.substring(0,300));
         console.log('Attempt '+attempts+' page sample:', pageText.replace(/\n/g,' '));
@@ -509,7 +515,7 @@ app.post('/get-quote', async (req, res) => {
         if(!stillCalc&&attempts>4){ console.log('No more calculating'); break; }
       } catch(e){
         console.log('Attempt '+attempts+' interrupted:', e.message);
-        await page.waitForTimeout(4000);
+        await new Promise(r => setTimeout(r, 4000));
       }
     }
 
