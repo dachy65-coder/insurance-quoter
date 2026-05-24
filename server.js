@@ -1,4 +1,4 @@
-// v9 — queue + submodel fix
+// v8
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
@@ -9,34 +9,9 @@ app.use(express.json());
 
 const QUOTE_URL = 'https://www.agentinsure.com/compare/auto-insurance-home-insurance/whitestoneins/quote.aspx';
 
-app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v9' }));
+app.get('/', (req, res) => res.json({ status: 'Insurance Quoter Running v8' }));
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// ─── QUEUE: one quote at a time ────────────────────────────────────────────
-let quoteQueue = [];
-let quoteRunning = false;
-
-function enqueueQuote(data, res) {
-  quoteQueue.push({ data, res });
-  console.log(`Queue: ${quoteQueue.length} waiting`);
-  processQueue();
-}
-
-async function processQueue() {
-  if (quoteRunning || quoteQueue.length === 0) return;
-  quoteRunning = true;
-  const { data, res } = quoteQueue.shift();
-  try {
-    const result = await runQuote(data);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-  quoteRunning = false;
-  processQueue(); // next in queue
-}
-// ──────────────────────────────────────────────────────────────────────────
 
 async function waitForText(page, text, timeout = 20000) {
   try {
@@ -109,7 +84,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
   });
   if (yearSelId) await nativeSelect(page, yearSelId, String(vehicleYear));
   await waitForSelectOptions(page, 'make', 5, 8000);
-  await sleep(1000);
+  await new Promise(r => setTimeout(r, 1000));
 
   // Make
   const makeResult = await page.evaluate((make) => {
@@ -122,7 +97,7 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
   }, vehicleMake.toUpperCase());
   if (makeResult && makeResult.value) await nativeSelect(page, makeResult.id, makeResult.value);
   await waitForSelectOptions(page, 'model', 5, 8000);
-  await sleep(1000);
+  await new Promise(r => setTimeout(r, 1000));
 
   // Model
   const modelResult = await page.evaluate((model) => {
@@ -144,31 +119,39 @@ async function fillVehicleYMM(page, vehicleYear, vehicleMake, vehicleModel) {
         return { id:'#'+sel.id, value:o.value, match:'contains' };
       }
     }
+    for(const o of sel.options) {
+      const t=o.text.toLowerCase();
+      if(t.startsWith(modelClean)&&(t.includes(' lx')||t.includes(' ex')||t.includes(' se'))) {
+        return { id:'#'+sel.id, value:o.value, match:'trim' };
+      }
+    }
     if(sel.options.length>1) return { id:'#'+sel.id, value:sel.options[1].value, match:'first' };
     return null;
   }, vehicleModel||'');
   console.log('Model result:', JSON.stringify(modelResult));
   if (modelResult && modelResult.value) await nativeSelect(page, modelResult.id, modelResult.value);
-  await sleep(2000);
+  await new Promise(r => setTimeout(r, 2000));
 
-  // SubModel — pick first option where price > 0 (skip |0 entries)
-  await page.evaluate(() => {
+  // SubModel — pick first option with non-zero price, fallback to first option
+  const subModelValue = await page.evaluate(() => {
     const sub = document.getElementById('Vehicle1_SubModel');
-    if (!sub || sub.options.length <= 1) return;
-    // Try to find first option with non-zero price (value format: VIN|PRICE)
-    let picked = null;
-    for (let i = 1; i < sub.options.length; i++) {
-      const val = sub.options[i].value || '';
-      const price = parseInt(val.split('|')[1] || '0', 10);
-      if (price > 0) { picked = sub.options[i].value; break; }
+    if (!sub) return null;
+    for (const o of sub.options) {
+      if (o.value && o.value !== '-1' && !o.value.endsWith('|0')) {
+        sub.value = o.value;
+        sub.dispatchEvent(new Event('change', { bubbles: true }));
+        return o.value;
+      }
     }
-    // Fall back to index 1 if all prices are 0
-    if (!picked) picked = sub.options[1].value;
-    sub.value = picked;
-    sub.dispatchEvent(new Event('change', { bubbles: true }));
-    console.log('SubModel picked:', picked);
+    if (sub.options.length > 1) {
+      sub.value = sub.options[1].value;
+      sub.dispatchEvent(new Event('change', { bubbles: true }));
+      return sub.options[1].value;
+    }
+    return null;
   });
-  await sleep(500);
+  console.log('SubModel selected:', subModelValue);
+  await new Promise(r => setTimeout(r, 500));
 }
 
 async function fixVehicleSelects(page, data) {
@@ -176,7 +159,7 @@ async function fixVehicleSelects(page, data) {
     document.querySelectorAll('select').forEach(sel => {
       const id=(sel.id||'').toLowerCase();
       if(!id.startsWith('vehicle')) return;
-      if(id.includes('submodel')) return;
+      if(id.includes('submodel')) return; // Don't touch SubModel
       if(sel.value==='-1'&&sel.options.length>1) {
         sel.value=sel.options[1].value;
         sel.dispatchEvent(new Event('change',{bubbles:true}));
@@ -229,7 +212,66 @@ async function scrapeQuotes(page) {
   });
 }
 
-async function runQuote(data) {
+
+app.get('/get-models', async (req, res) => {
+  const { year, make } = req.query;
+  if (!year || !make) return res.json({ error: 'year and make required' });
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(2000);
+    await page.evaluate(() => {
+      document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='No') r.click(); });
+      document.querySelectorAll('input[type="text"]').forEach(inp => {
+        const id=(inp.id||'').toLowerCase();
+        if(id.includes('firstname')){ inp.value='Test'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('lastname')) { inp.value='User'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('email'))    { inp.value='test@test.com'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('address')&&!id.includes('email')){ inp.value='123 Main St'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('city'))     { inp.value='New York'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+        if(id.includes('zip'))      { inp.value='10001'; inp.dispatchEvent(new Event('change',{bubbles:true})); }
+      });
+      const ph='9295551234';
+      const phones=Array.from(document.querySelectorAll('input[type="text"]')).filter(i=>(i.id||'').toLowerCase().includes('phone'));
+      if(phones.length>=3){phones[0].value=ph.slice(0,3);phones[1].value=ph.slice(3,6);phones[2].value=ph.slice(6,10);phones.forEach(i=>i.dispatchEvent(new Event('change',{bubbles:true})));}
+      document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
+      document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
+    });
+    await sleep(1000);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:20000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:20000});
+    await sleep(500);
+    await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:20000});
+    await sleep(1000);
+    await page.select('#Vehicle1_Year', String(year));
+    await sleep(1500);
+    await page.evaluate((m)=>{
+      const sel=document.getElementById('Vehicle1_Make');
+      if(sel){for(const o of sel.options){if(o.value.toUpperCase()===m||o.text.toUpperCase()===m){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));break;}}}
+    }, make.toUpperCase());
+    await sleep(2000);
+    const models = await page.evaluate(()=>{
+      const sel=document.getElementById('Vehicle1_Model');
+      if(!sel) return [];
+      return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
+    });
+    await browser.close();
+    res.json({ year, make, models });
+  } catch(e) {
+    if(browser) await browser.close().catch(()=>{});
+    res.json({ error: e.message, models: [] });
+  }
+});
+
+app.post('/get-quote', async (req, res) => {
+  const data = req.body;
   const insurer = data.currentInsurer || 'None';
   const useVin = data.vehicleEntryMethod === 'vin' && data.vin && data.vin.length === 17;
   console.log('Quote request:', data.firstName, data.lastName,
@@ -269,14 +311,14 @@ async function runQuote(data) {
       });
       document.querySelectorAll('input[type="radio"]').forEach(r => { if(r.value==='Auto') r.click(); });
     }, data);
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
     await clickSubmit(page);
     await waitForText(page, 'Driver');
     console.log('Step 1 done');
 
     // STEP 2
     console.log('Step 2: Filling driver...');
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
     const dob=(data.dob||'01/01/1990').split('/');
     await page.evaluate((d, dob) => {
       document.querySelectorAll('input[type="text"]').forEach(inp => {
@@ -296,17 +338,17 @@ async function runQuote(data) {
     await typeField(page, 'Driver1_DOB',   dob[0]||'01');
     await typeField(page, 'Driver1_DOB_1', dob[1]||'01');
     await typeField(page, 'Driver1_DOB_2', dob[2]||'1990');
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Driver Summary');
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Vehicle');
     console.log('Step 2 done');
 
     // STEP 3: Vehicle
     console.log('Step 3: Filling vehicle...');
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
 
     if (useVin) {
       console.log('Step 3: Using VIN:', data.vin);
@@ -317,14 +359,14 @@ async function runQuote(data) {
           if(val==='VIN'||label.includes('BY VIN')||label.includes('VIN')) r.click();
         });
       });
-      await sleep(1000);
+      await new Promise(r => setTimeout(r, 1000));
       await page.evaluate((vin) => {
         document.querySelectorAll('input[type="text"]').forEach(inp => {
           const id=(inp.id||inp.name||'').toUpperCase();
           if(id.includes('VIN')){ inp.value=vin; inp.dispatchEvent(new Event('input',{bubbles:true})); inp.dispatchEvent(new Event('change',{bubbles:true})); }
         });
       }, data.vin);
-      await sleep(500);
+      await new Promise(r => setTimeout(r, 500));
       const lookupClicked = await page.evaluate(() => {
         const btns=Array.from(document.querySelectorAll('input, button'));
         const btn=btns.find(b=>(b.value||b.innerText||b.textContent||'').toLowerCase().includes('lookup'));
@@ -333,28 +375,32 @@ async function runQuote(data) {
       });
       console.log('VIN lookup clicked:', lookupClicked);
       await waitForSelectOptions(page, 'year', 2, 10000);
-      await sleep(2000);
+      await new Promise(r => setTimeout(r, 2000));
     } else {
+      // Click By year/make/model radio
       await page.evaluate(() => {
         document.querySelectorAll('input[type="radio"]').forEach(r => {
           if(r.value&&r.value.toLowerCase().includes('year')) r.click();
         });
       });
-      await sleep(500);
+      await new Promise(r => setTimeout(r, 500));
       await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
     }
 
+    // Fix remaining selects and set purchase date
     await fixVehicleSelects(page, data);
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
 
     const vState = await page.evaluate(() =>
       Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
     );
     console.log('Vehicle state before submit:', JSON.stringify(vState));
 
+    // Submit vehicle form
     await clickSubmit(page);
-    await sleep(5000);
+    await new Promise(r => setTimeout(r, 5000));
 
+    // Check if still on vehicle page with errors (ASP.NET postback reset)
     const stillOnVehiclePage = await page.evaluate(() =>
       document.body.innerText.includes('Please correct the items')
     );
@@ -362,34 +408,34 @@ async function runQuote(data) {
 
     if (!useVin && stillOnVehiclePage) {
       console.log('Re-filling vehicle after postback reset...');
-      await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, data.vehicleModel);
+      // If SubModel had |0, try the next available model trim
+      const modelToUse = await page.evaluate((model) => {
+        const sel = document.getElementById('Vehicle1_Model');
+        if (!sel) return model;
+        // Check if current SubModel has |0
+        const sub = document.getElementById('Vehicle1_SubModel');
+        const subHasZero = sub && sub.value && sub.value.endsWith('|0');
+        if (!subHasZero) return model;
+        // Find next option with same base name
+        const base = model.split(' ')[0];
+        let foundCurrent = false;
+        for (const o of sel.options) {
+          if (o.value === model) { foundCurrent = true; continue; }
+          if (foundCurrent && o.text.startsWith(base)) return o.value;
+        }
+        return model;
+      }, data.vehicleModel);
+      console.log('Model to use on retry:', modelToUse);
+      await fillVehicleYMM(page, data.vehicleYear, data.vehicleMake, modelToUse);
       await fixVehicleSelects(page, data);
-      await sleep(1000);
+      await new Promise(r => setTimeout(r, 1000));
 
       const vState2 = await page.evaluate(() =>
         Array.from(document.querySelectorAll('select')).filter(s=>(s.id||'').startsWith('Vehicle')).map(s=>({id:s.id,value:s.value,options:s.options.length}))
       );
       console.log('Vehicle state 2nd submit:', JSON.stringify(vState2));
-
-      // Check submodel price again before submitting
-      const subCheck = await page.evaluate(() => {
-        const sub = document.getElementById('Vehicle1_SubModel');
-        if (!sub || sub.options.length <= 1) return 'no submodel';
-        const val = sub.value || '';
-        const price = parseInt(val.split('|')[1] || '0', 10);
-        if (price === 0) {
-          // Try again to find non-zero price option
-          for (let i = 1; i < sub.options.length; i++) {
-            const p = parseInt((sub.options[i].value||'').split('|')[1] || '0', 10);
-            if (p > 0) { sub.value = sub.options[i].value; sub.dispatchEvent(new Event('change',{bubbles:true})); return 'fixed to ' + sub.value; }
-          }
-        }
-        return 'ok: ' + val;
-      });
-      console.log('SubModel check on retry:', subCheck);
-
       await clickSubmit(page);
-      await sleep(3000);
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     const vSummary = await waitForText(page, 'Vehicle Summary', 15000);
@@ -397,28 +443,28 @@ async function runQuote(data) {
       const vText = await page.evaluate(() => document.body.innerText.substring(0, 500));
       console.log('Vehicle page error:', vText.replace(/\n/g,' '));
     }
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Incident');
     console.log('Step 3 done');
 
-    // STEP 4
+    // STEP 4: Incidents
     console.log('Step 4: Incidents...');
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
     await page.evaluate(() => {
       document.querySelectorAll('input[type="radio"]').forEach(r => {
         const v=(r.value||'').toLowerCase();
         if(v==='no'||v==='none'||v==='false') r.click();
       });
     });
-    await sleep(500);
+    await new Promise(r => setTimeout(r, 500));
     await clickSubmit(page);
     await waitForText(page, 'Almost Done');
     console.log('Step 4 done');
 
     // STEP 5
     console.log('Step 5: Final page...');
-    await sleep(2000);
+    await new Promise(r => setTimeout(r, 2000));
     const today=new Date(); today.setDate(today.getDate()+7);
     const mm=String(today.getMonth()+1).padStart(2,'0');
     const dd=String(today.getDate()).padStart(2,'0');
@@ -445,7 +491,7 @@ async function runQuote(data) {
       }
     }, data.state, insurer);
 
-    await sleep(2000);
+    await new Promise(r => setTimeout(r, 2000));
     console.log('Step 5: Typing text fields...');
     await typeField(page, 'Applicant_FirstName',    data.firstName);
     await typeField(page, 'Applicant_LastName',     data.lastName);
@@ -477,7 +523,7 @@ async function runQuote(data) {
     }));
     console.log('Step 5 filled:', JSON.stringify(filled));
 
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
     await clickSubmit(page);
     console.log('Step 5: Submitted, waiting for Quote Summary...');
     await waitForText(page, 'Quote Summary', 60000);
@@ -487,7 +533,7 @@ async function runQuote(data) {
     let attempts=0;
     while(attempts<15){
       try{
-        await sleep(6000);
+        await new Promise(r => setTimeout(r, 6000));
         attempts++;
         const pageText=await page.evaluate(()=>document.body.innerText.substring(0,300));
         console.log('Attempt '+attempts+' page sample:', pageText.replace(/\n/g,' '));
@@ -498,34 +544,29 @@ async function runQuote(data) {
         if(!stillCalc&&attempts>4){ console.log('No more calculating'); break; }
       } catch(e){
         console.log('Attempt '+attempts+' interrupted:', e.message);
-        await sleep(4000);
+        await new Promise(r => setTimeout(r, 4000));
       }
     }
 
     await browser.close();
     if(quotes.length===0){
-      return {
+      return res.status(200).json({
         success: false,
         message: 'Online quotes are not available for this vehicle. Please call Whitestone Insurance at (929) 292-8005 for a personalized quote.',
         quotes: []
-      };
+      });
     }
     console.log('Success! '+quotes.length+' quotes found');
-    return { success: true, quotes };
+    res.json({ success: true, quotes });
 
   } catch(err){
     console.error('Error:', err.message);
     if(browser) await browser.close().catch(()=>{});
-    throw err;
+    res.status(500).json({ success: false, error: err.message });
   }
-}
-
-// Route now uses queue
-app.post('/get-quote', (req, res) => {
-  enqueueQuote(req.body, res);
 });
 
-// ─── SCRAPER (unchanged) ────────────────────────────────────────────────────
+// ─── SCRAPER ───────────────────────────────────────────────────────────────
 const https = require('https');
 
 const MAKES = [
@@ -563,6 +604,8 @@ async function runScraper() {
     browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'] });
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
+
+    // Navigate to vehicle page once
     await page.goto(QUOTE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await sleep(2000);
     await page.evaluate(() => {
@@ -582,20 +625,24 @@ async function runScraper() {
       document.querySelectorAll('select').forEach(sel=>{if((sel.id||'').toLowerCase().includes('state')){sel.value='NY';sel.dispatchEvent(new Event('change',{bubbles:true}));}});
       document.querySelectorAll('input[type="radio"]').forEach(r=>{if(r.value==='Auto')r.click();});
     });
-    await sleep(3000);
+    await sleep(1500);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:60000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver'),{timeout:30000});
     await sleep(500);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:60000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Driver Summary'),{timeout:30000});
     await sleep(500);
     await page.evaluate(()=>{document.querySelector('input[type="submit"]')?.click();});
-    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:60000});
+    await page.waitForFunction(()=>document.body.innerText.includes('Vehicle'),{timeout:30000});
     await sleep(1000);
     console.log('Scraper: on vehicle page!');
 
+    // Count total combinations
     let total = 0;
-    for (const make of MAKES) { const startYear = MAKE_START_YEAR[make] || 2000; total += (2025 - startYear + 1); }
+    for (const make of MAKES) {
+      const startYear = MAKE_START_YEAR[make] || 2000;
+      total += (2025 - startYear + 1);
+    }
     scrapeStatus.total = total;
     let done = 0;
 
@@ -604,6 +651,7 @@ async function runScraper() {
       const startYear = MAKE_START_YEAR[make] || 2000;
       scrapeStatus.current = make;
       console.log(`Scraping ${make}...`);
+
       for (let year = 2025; year >= startYear; year--) {
         if (scrapeResults[make][year]) { done++; scrapeStatus.progress = done; continue; }
         try {
@@ -622,14 +670,22 @@ async function runScraper() {
             if(!sel) return [];
             return Array.from(sel.options).filter(o=>o.value&&o.value!=='-1').map(o=>o.text.trim()).filter(t=>t&&t!=='--select--');
           });
-          if (models.length > 0) { scrapeResults[make][year] = models; console.log(`  ${year} ${make}: ${models.length} models`); }
-        } catch(e) { console.log(`  ${year} ${make}: error - ${e.message}`); }
+          if (models.length > 0) {
+            scrapeResults[make][year] = models;
+            console.log(`  ${year} ${make}: ${models.length} models`);
+          }
+        } catch(e) {
+          console.log(`  ${year} ${make}: error - ${e.message}`);
+        }
         done++; scrapeStatus.progress = done;
         await sleep(300);
       }
+
+      // Save to Gist after each make
       await saveToGist(scrapeResults);
       console.log(`Saved ${make} to Gist`);
     }
+
     await browser.close();
     scrapeStatus.running = false;
     scrapeStatus.done = true;
@@ -654,8 +710,9 @@ app.get('/scrape-status', (req, res) => {
   res.json({ ...scrapeStatus, makes: Object.keys(scrapeResults).length, gistId: process.env.GIST_ID });
 });
 
-app.get('/scrape-result', (req, res) => res.json(scrapeResults));
-app.get('/queue-status', (req, res) => res.json({ running: quoteRunning, waiting: quoteQueue.length }));
+app.get('/scrape-result', (req, res) => {
+  res.json(scrapeResults);
+});
 // ───────────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
